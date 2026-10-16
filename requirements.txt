@@ -1,0 +1,11 @@
+# Install PyTorch for your platform separately if you need a GPU build.
+torch>=2.4,<3
+transformers==4.57.6
+numpy>=1.26,<3
+onnx>=1.16
+onnxruntime>=1.18
+huggingface_hub
+psutil
+matplotlib
+# checks
+pytest
