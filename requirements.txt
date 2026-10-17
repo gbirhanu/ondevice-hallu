@@ -3,9 +3,12 @@ torch>=2.4,<3
 transformers==4.57.6
 numpy>=1.26,<3
 onnx>=1.16
-onnxruntime>=1.18
+onnxruntime==1.29.0
+onnx-ir==1.0.0      # needed by onnxruntime for the 8-bit (MatMulNBits) files
 huggingface_hub
 psutil
 matplotlib
+scikit-learn
+# the signals step (GPU) also needs: bitsandbytes accelerate
 # checks
 pytest

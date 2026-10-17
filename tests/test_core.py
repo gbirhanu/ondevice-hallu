@@ -101,8 +101,38 @@ class Models(unittest.TestCase):
         a = model.predict(net, tok, samples, fp16=False)
         b = cpu.predict(cpu.session(str(out / 'model_fp32.onnx')), tok, samples)
         self.assertEqual([[t[:2] for t in x] for x in a], [[t[:2] for t in x] for x in b])
+        ids = [model.encode(tok, s['prompt'], s['answer'], 4096)[0] for s in samples]
+        self.assertLess(cpu.agreement(str(out / 'model_fp32.onnx'), str(out / 'model_int8.onnx'), ids)['max_prob_diff'], 0.05)
+        made = cpu.quantize(str(out / 'model_fp32.onnx'), str(out / 'model_mix.onnx'), 'mix', calib=ids)
+        self.assertEqual(made['layers'], 13)   # 3 layers x 4 weight matrices + the head; the classifier stays float
+        self.assertLess(cpu.agreement(str(out / 'model_fp32.onnx'), str(out / 'model_mix.onnx'), ids)['max_prob_diff'], 0.2)
         timing = cpu.time_answers(str(out / 'model_int8.onnx'), tok, samples, threads=1, warmup=1)
         self.assertEqual(timing['answers'], 3)
+
+
+class Embeddings8bit(unittest.TestCase):
+    def test_lookup_matches_block_rounding(self):
+        import numpy as np
+        import onnx
+        import onnxruntime as ort
+        from onnx import TensorProto, helper, numpy_helper
+        rng = np.random.default_rng(0)
+        table = rng.normal(size=(2000, 64)).astype(np.float32)
+        table[:, 5] *= 30                           # an outlier column, as real embeddings have
+        graph = helper.make_graph(
+            [helper.make_node('Gather', ['table', 'ids'], ['out'], name='emb')], 'g',
+            [helper.make_tensor_value_info('ids', TensorProto.INT64, ['b', 's'])],
+            [helper.make_tensor_value_info('out', TensorProto.FLOAT, ['b', 's', 64])],
+            [numpy_helper.from_array(table, 'table')])
+        m = cpu._embeddings_8bit(helper.make_model(graph, opset_imports=[helper.make_opsetid('', 17)], ir_version=8))
+        onnx.checker.check_model(m)
+        ids = np.array([[0, 7, 1999, 7]], dtype=np.int64)
+        got = ort.InferenceSession(m.SerializeToString(), providers=['CPUExecutionProvider']).run(None, {'ids': ids})[0]
+        blocks = table.reshape(2000, 2, 32)
+        scale = np.abs(blocks).max(2, keepdims=True) / 127
+        want = (np.round(blocks / scale) * scale).reshape(2000, 64)[ids]
+        np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-6)
+        self.assertLess(np.abs(got - table[ids]).max(), np.abs(table).max() / 127)
 
 
 if __name__ == '__main__':

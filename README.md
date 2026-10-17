@@ -15,6 +15,17 @@ Concept note: "Checking AI answers on the phone: a lightweight hallucination det
 | Size | ONNX file size in full precision and in 8-bit. |
 | Speed | Time per answer on the CPU, one answer at a time (as a phone app works), with 1 and 2 threads, ONNX Runtime (the engine used on Android). |
 
+## 8-bit files
+
+The weights are stored in 8 bits, in blocks of 32 numbers with one scale each (the word
+embeddings too), and the arithmetic stays in float (`--recipe w8`, the default). The first
+attempt (`--recipe dyn`, onnxruntime's dynamic quantization) also rounded every layer's input
+to 8 bits with one scale for the whole input. ModernBERT-type models feed some layers inputs
+with a few values thousands of times larger than the rest; one scale then rounds the ordinary
+values to zero, and span F1 fell by 21 to 50 points. `--recipe mix` keeps 8-bit arithmetic only
+in the layers whose inputs are safe; it is faster but less exact. `export` reports, per model,
+how close the 8-bit file is to the float file and how many layers have such extreme inputs.
+
 ## Run it on Colab (first experiment: the size ladder)
 
 1. Create an empty **public** GitHub repository `gbirhanu/ondevice-hallu` and push this folder to it.
@@ -25,16 +36,29 @@ to `MyDrive/ondevice_hallu/work`. Every step skips work that is already saved, s
 session continues where it left off. ONNX files stay on Colab's own disk (they are remade
 when needed) so Drive does not fill up.
 
+## First test of the generator-aware checker
+
+`colab/signals_test.ipynb` asks whether a small checker gets better when it also reads the
+answering model's own signals. It re-reads RAGTruth's test answers of the open models
+(Llama-2-7B/13B-chat, Mistral-7B-Instruct) with the model that wrote them, in 4-bit, and records
+per answer token: confidence (log-probability, entropy, gaps to the top token) and the lookback
+ratio of every layer (`odh/signals.py`). It then combines these with the text checkers' scores
+from the size ladder and compares text only, + confidence, + attention and + both, all trained
+and scored the same way (5-fold cross-validation split by source; `odh/fusion.py`). Results:
+`results/fusion.md`. It needs the size ladder's `preds` folder.
+
 ## Commands
 
 ```
 python run.py models                               # find the published small detectors
 python run.py score     --name tiny68m             # span F1 on the full test set
-python run.py export    --name tiny68m             # ONNX + 8-bit
+python run.py export    --name tiny68m             # ONNX + 8-bit (--recipe w8 | mix | dyn)
 python run.py check8bit --name tiny68m --n 300     # F1 change from 8-bit
 python run.py bench     --name tiny68m --threads 1 2 --where colab
 python run.py table                                # results/table.md + results/ladder.png
 python run.py train     --name mine68m --base jhu-clsp/ettin-encoder-68m   # our own model
+python run.py signals   --generator llama-2-7b-chat    # answering-model signals (GPU, 4-bit)
+python run.py fusion                               # do the signals add to the text checkers?
 ```
 
 All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the
@@ -49,6 +73,8 @@ All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: co
 | `odh/spans.py` | Token probabilities to character spans (0.5 cut-off) |
 | `odh/model.py` | Load, predict, train token classifiers (ModernBERT, Ettin, TinyLettuce, LettuceDetect) |
 | `odh/cpu.py` | ONNX export, 8-bit quantization, CPU prediction and timing |
+| `odh/signals.py` | The answering model's confidence and attention for every answer token |
+| `odh/fusion.py` | Text checker + answering-model signals: cross-validated comparison |
 | `run.py` | The commands above |
 
 Checks without a GPU or downloads: `python -m pytest tests -q` and, for an end-to-end run,

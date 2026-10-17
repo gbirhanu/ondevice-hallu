@@ -2,11 +2,13 @@
 
     python run.py models                          # find the published small detectors
     python run.py score  --name tiny68m           # span F1 on the full test set (GPU if present)
-    python run.py export --name tiny68m           # ONNX full precision + 8-bit
+    python run.py export --name tiny68m           # ONNX full precision + 8-bit (--recipe w8, mix or dyn)
     python run.py check8bit --name tiny68m        # what 8-bit costs in F1, on a fixed test subset
     python run.py bench  --name tiny68m --threads 1 2   # time per answer on this CPU
     python run.py train  --name mine68m --base jhu-clsp/ettin-encoder-68m
     python run.py table                           # results/table.md and results/ladder.png
+    python run.py signals --generator llama-2-7b-chat   # the answering model's signals (GPU)
+    python run.py fusion                          # do those signals add to text checkers?
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -36,7 +38,7 @@ LADDER = [
 
 
 def paths(work):
-    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models')}
+    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals')}
     for d in p.values():
         os.makedirs(d, exist_ok=True)
     return p
@@ -54,8 +56,12 @@ def read_json(path):
         return json.load(fh)
 
 
-def done(path, args):
+def done(path, args, recipe=None):
+    """True when the result exists (and, for 8-bit results, was made with the same recipe)."""
     if os.path.exists(path) and not args.redo:
+        if recipe and read_json(path).get('recipe', 'dyn') != recipe:
+            print(f'{path} was made with another 8-bit recipe; redoing it with {recipe}.')
+            return False
         print(f'Already done: {path} (add --redo to repeat).')
         return True
     return False
@@ -142,44 +148,76 @@ def cmd_score(args, p):
           f'summary {result["by_task"].get("summary", {}).get("span_f1")})')
 
 
+def encoded(tok, samples, max_length):
+    from odh.model import encode
+    return [encode(tok, s['prompt'], s['answer'], max_length)[0] for s in samples]
+
+
 def make_onnx(args, p, name):
-    """ONNX files of a run (full precision and 8-bit), made only when missing."""
+    """ONNX files of a run (full precision and 8-bit), made only when missing or when the
+    8-bit file was made with another recipe."""
+    from transformers import AutoTokenizer
     from odh import cpu
     folder = os.path.join(p['onnx'], args.name)
     fp32, int8 = os.path.join(folder, 'model_fp32.onnx'), os.path.join(folder, 'model_int8.onnx')
-    params = None
-    if not (os.path.exists(fp32) and os.path.exists(int8)):
+    recipe_file = os.path.join(folder, 'int8_recipe.txt')
+    params, made = None, None
+    if not os.path.exists(fp32):
         print(f'Exporting {name} to ONNX in {folder}.')
         params = cpu.export(name, folder)
-        cpu.quantize(fp32, int8)
-    return folder, fp32, int8, params
+    old = open(recipe_file).read().strip() if os.path.exists(recipe_file) else None
+    if not os.path.exists(int8) or old != args.recipe:
+        print(f'Making the 8-bit file of {args.name} (recipe {args.recipe}).')
+        calib = None
+        if args.recipe == 'mix':      # a few training answers, only to find layers with extreme inputs
+            train, _, _ = data.splits(data.load_ragtruth(args.data_dir))
+            calib = encoded(AutoTokenizer.from_pretrained(folder), data.subset(train, 8), args.max_length)
+        made = cpu.quantize(fp32, int8, args.recipe, calib=calib)
+        with open(recipe_file, 'w') as fh:
+            fh.write(args.recipe)
+    return folder, fp32, int8, params, made
 
 
 def cmd_export(args, p):
     out = os.path.join(p['results'], f'{args.name}_export.json')
-    if done(out, args):
+    if done(out, args, args.recipe):
         make_onnx(args, p, model_of(p, args.name, args.model))
         return
+    from transformers import AutoTokenizer
     from odh import cpu
     name = model_of(p, args.name, args.model)
-    folder, fp32, int8, params = make_onnx(args, p, name)
+    folder, fp32, int8, params, made = make_onnx(args, p, name)
     if params is None:
         from odh.model import load
         params = sum(x.numel() for x in load(name)[1].parameters())
-    _, _, test = data.splits(data.load_ragtruth(args.data_dir))
-    worst = cpu.parity(name, fp32, data.subset(test, 12), args.max_length)
-    result = {'name': args.name, 'model': name, 'params': params, 'fp32_mb': cpu.size_mb(fp32),
-              'int8_mb': cpu.size_mb(int8), 'onnx_vs_pytorch_max_prob_diff': worst}
+    train, _, test = data.splits(data.load_ragtruth(args.data_dir))
+    check = data.subset(test, 12)
+    worst = cpu.parity(name, fp32, check, args.max_length)
+    tok = AutoTokenizer.from_pretrained(folder)
+    close = cpu.agreement(fp32, int8, encoded(tok, check, args.max_length))
+    # How coarse one-scale 8-bit rounding of each layer's input would be (why "dyn" failed)
+    ranges = cpu.input_ranges(fp32, encoded(tok, data.subset(train, 4), args.max_length))
+    extreme = sorted((v, k) for k, v in ranges.items() if v > cpu.EXTREME)
+    result = {'name': args.name, 'model': name, 'params': params, 'recipe': args.recipe,
+              'fp32_mb': cpu.size_mb(fp32), 'int8_mb': cpu.size_mb(int8),
+              'onnx_vs_pytorch_max_prob_diff': worst, 'int8_vs_fp32': close,
+              'layers_with_weights': len(ranges), 'layers_with_extreme_inputs': len(extreme),
+              'worst_input_step_over_typical': max(ranges.values()) if ranges else None,
+              'extreme_layers': [k for _, k in reversed(extreme)][:40], 'quantize': made}
     write_json(out, result)
     print(f'{args.name}: {params / 1e6:.0f}M parameters, {result["fp32_mb"]} MB -> {result["int8_mb"]} MB '
-          f'in 8-bit; ONNX matches PyTorch within {worst:.1e}.')
+          f'in 8-bit ({args.recipe}); ONNX matches PyTorch within {worst:.1e}; 8-bit against float: '
+          f'largest probability change {close["max_prob_diff"]}, decisions flipped {100 * close["flipped_share"]:.2f}%; '
+          f'{len(extreme)} of {len(ranges)} layers have extreme inputs.')
     if worst > 1e-2:
         print('WARNING: the ONNX file does not match PyTorch; do not trust its numbers.')
+    if close['flipped_share'] > 0.02:
+        print('WARNING: the 8-bit file changes more than 2% of word decisions.')
 
 
 def cmd_check8bit(args, p):
     out = os.path.join(p['results'], f'{args.name}_int8.json')
-    if done(out, args):
+    if done(out, args, args.recipe):
         return
     from transformers import AutoTokenizer
     from odh import cpu
@@ -193,7 +231,8 @@ def cmd_check8bit(args, p):
     int8_tokens = cpu.predict(cpu.session(os.path.join(folder, 'model_int8.onnx')), tok, sub, args.max_length)
     int8 = all_spans(int8_tokens)
     a, b = score(full, sub)['all'][2], score(int8, sub)['all'][2]
-    result = {'name': args.name, 'answers': len(sub), 'span_f1_full_precision': a, 'span_f1_int8': b,
+    result = {'name': args.name, 'recipe': args.recipe, 'answers': len(sub),
+              'span_f1_full_precision': a, 'span_f1_int8': b,
               'change': round(b - a, 2), 'change_ci95': bootstrap(int8, sub, base=full),
               'seconds': round(time.time() - t0)}
     write_json(out, result)
@@ -203,7 +242,7 @@ def cmd_check8bit(args, p):
 
 def cmd_bench(args, p):
     out = os.path.join(p['results'], f'{args.name}_bench_{args.where}.json')
-    if done(out, args):
+    if done(out, args, args.recipe):
         return
     from transformers import AutoTokenizer
     from odh import cpu
@@ -218,10 +257,24 @@ def cmd_bench(args, p):
             r['weights'] = kind
             rows.append(r)
             print(f'{args.name} {kind} {threads} thread(s): median {r["median_ms"]} ms, '
-                  f'90th percentile {r["p90_ms"]} ms per answer ({r["mean_tokens"]} tokens on average)')
+                  f'90th percentile {r["p90_ms"]} ms per answer ({r["mean_tokens"]} tokens on average); '
+                  f'memory added by the model {r["model_mem_mb"]} MB')
+    import onnxruntime
+    write_json(out, {'name': args.name, 'recipe': args.recipe, 'where': args.where, 'cpu': cpu_name(),
+                     'cores': os.cpu_count(), 'onnxruntime': onnxruntime.__version__, 'rows': rows})
+
+
+def cpu_name():
     import platform
-    write_json(out, {'name': args.name, 'where': args.where, 'cpu': platform.processor() or platform.machine(),
-                     'cores': os.cpu_count(), 'rows': rows})
+    try:
+        with open('/proc/cpuinfo') as fh:
+            text = fh.read()
+        name = re.search(r'model name\s*:\s*(.+)', text)
+        flags = re.search(r'flags\s*:\s*(.+)', text)
+        extra = [f for f in ('avx512_vnni', 'avx_vnni', 'avx512f', 'avx2') if flags and f in flags.group(1).split()]
+        return (name.group(1).strip() if name else platform.machine()) + (f' ({", ".join(extra)})' if extra else '')
+    except OSError:
+        return platform.processor() or platform.machine()
 
 
 def cmd_train(args, p):
@@ -238,6 +291,73 @@ def cmd_train(args, p):
     write_json(out, {'name': args.name, 'base': args.base, 'epochs': args.epochs, 'lr': args.lr,
                      'seed': args.seed, 'train_answers': len(train_set), 'history': history})
     print(f'Saved the best epoch to {folder}. Next: python run.py score --name {args.name}')
+
+
+def cmd_signals(args, p):
+    """Re-read the answers of one open answering model and record its signals (odh/signals.py)."""
+    import math
+    from odh import signals
+    gen = args.generator
+    candidates = [args.model] if args.model else signals.GENERATORS[gen]
+    samples = [s for s in data.load_ragtruth(args.data_dir) if s['model'] == gen and s['split'] == args.split]
+    samples = data.subset(samples, args.limit)
+    folder = os.path.join(p['signals'], gen, args.split)
+    chunks = math.ceil(len(samples) / 25)
+    have = len([f for f in os.listdir(folder) if f.endswith('.pkl.gz')]) if os.path.isdir(folder) else 0
+    out = os.path.join(p['results'], f'signals_{gen}_{args.split}.json')
+    if have >= chunks and os.path.exists(out) and not args.redo:
+        print(f'Already done: {folder} ({have} chunk files).')
+        return
+    t0 = time.time()
+    tok = model = None
+    for hf_id in candidates:
+        try:
+            tok, model = signals.load_generator(hf_id, four_bit=not args.no_4bit, device=device())
+            break
+        except Exception as err:                       # not found, or no access (licence not accepted)
+            print(f'Could not load {hf_id}: {type(err).__name__}: {str(err)[:300]}')
+    if model is None:
+        raise SystemExit(f'No weights available for {gen}; skipped. See the notebook for the Hugging Face token.')
+    print(f'Recording the signals of {gen} ({hf_id}) for {len(samples)} {args.split} answers.')
+    skipped = signals.record_all(model, tok, samples, folder)
+    write_json(out, {'generator': gen, 'hf_id': hf_id, 'split': args.split, 'answers': len(samples),
+                     'chat_template': bool(getattr(tok, 'chat_template', None)),
+                     'skipped_too_long': skipped, 'four_bit': not args.no_4bit,
+                     'layers': len(signals._attention_modules(model)), 'seconds': round(time.time() - t0)})
+    print(f'Saved to {folder}; {skipped} answers skipped (longer than 4,096 tokens).')
+
+
+def cmd_fusion(args, p):
+    """Do the answering model's signals add to text checkers? (odh/fusion.py)"""
+    from odh import fusion, signals
+    test = [s for s in data.load_ragtruth(args.data_dir) if s['split'] == 'test']
+    records = {}
+    for g in args.generators or list(signals.GENERATORS):
+        records.update(signals.load_records(os.path.join(p['signals'], g, 'test')))
+    samples = [s for s in test if s['id'] in records]
+    if not samples:
+        raise SystemExit('No signals found: run the "signals" step first.')
+    samples = data.subset(samples, args.limit)
+    names = [n for n in (args.text or ['tiny17m', 'tiny32m', 'tiny68m', 'ld_base'])
+             if os.path.exists(os.path.join(p['preds'], f'{n}_test.json.gz'))]
+    if not names:
+        raise SystemExit('No text-checker predictions found: run the "score" step first.')
+    for n in names:                               # keep answers that every checker has scored
+        with gzip.open(os.path.join(p['preds'], f'{n}_test.json.gz'), 'rt', encoding='utf-8') as fh:
+            scored = set(json.load(fh)['ids'])
+        samples = [s for s in samples if s['id'] in scored]
+    text_tokens = {n: load_preds(os.path.join(p['preds'], f'{n}_test.json.gz'), samples) for n in names}
+    print(f'{len(samples)} test answers with signals from '
+          f'{", ".join(sorted({s["model"] for s in samples}))}; text checkers: {", ".join(names)}.')
+    t0 = time.time()
+    results = fusion.run(samples, text_tokens, records, folds=args.folds)
+    results['setup'] = {'answers': len(samples), 'models': sorted({s['model'] for s in samples}),
+                        'folds': args.folds, 'seconds': round(time.time() - t0)}
+    write_json(os.path.join(p['results'], 'fusion.json'), results)
+    md = fusion.table(results)
+    with open(os.path.join(p['results'], 'fusion.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
 
 
 def cmd_table(args, p):
@@ -266,7 +386,7 @@ def cmd_table(args, p):
                      'qa': s['by_task'].get('qa', {}).get('span_f1'),
                      'summary': s['by_task'].get('summary', {}).get('span_f1'),
                      'data2text': s['by_task'].get('data2text', {}).get('span_f1'),
-                     'int8_change': q.get('change'), 'bench': bench})
+                     'int8_change': q.get('change'), 'int8_recipe': q.get('recipe', 'dyn'), 'bench': bench})
     if not rows:
         print('No results yet.')
         return
@@ -275,10 +395,13 @@ def cmd_table(args, p):
             '8-bit change'] + [f'ms/answer ({c})' for c in timing_cols]
     lines = ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
     for r in rows:
+        change = '' if r['int8_change'] is None else f'{r["int8_change"]:+.2f} ({r["int8_recipe"]})'
         cells = [r['label'], f'{r["params_m"]}M', r['int8_mb'] or '', f'{r["span_f1"]} [{r["ci"][0]}, {r["ci"][1]}]',
-                 r['qa'], r['summary'], r['data2text'],
-                 '' if r['int8_change'] is None else f'{r["int8_change"]:+.2f}'] + [r['bench'].get(c, '') for c in timing_cols]
+                 r['qa'], r['summary'], r['data2text'], change] + [r['bench'].get(c, '') for c in timing_cols]
         lines.append('| ' + ' | '.join(str(c) for c in cells) + ' |')
+    lines.append('\n8-bit change: span F1 of the 8-bit file minus full precision on the same fixed test '
+                 'answers; the recipe that made the 8-bit file is in brackets (see odh/cpu.py). '
+                 'Times are for the 8-bit file.')
     table = '\n'.join(lines)
     with open(os.path.join(res, 'table.md'), 'w', encoding='utf-8') as fh:
         fh.write(table + '\n')
@@ -313,7 +436,8 @@ def cmd_table(args, p):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table'])
+    ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
+                                     'signals', 'fusion'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -324,15 +448,25 @@ def main():
     ap.add_argument('--n', type=int, default=300, help='check8bit / bench: answers in the fixed test subset')
     ap.add_argument('--threads', type=int, nargs='+', default=[1, 2], help='bench: CPU threads to try')
     ap.add_argument('--where', default='colab', help='bench: a label for this machine, e.g. laptop')
+    ap.add_argument('--recipe', default='w8', choices=['w8', 'mix', 'dyn'],
+                    help='how the 8-bit file is made (see odh/cpu.py); default w8')
     ap.add_argument('--epochs', type=int, default=3)
     ap.add_argument('--lr', type=float, default=2e-5)
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--batch-tokens', type=int, default=8192)
     ap.add_argument('--limit', type=int, help='use only about N answers (quick checks)')
+    ap.add_argument('--generator', help='signals: RAGTruth name of the answering model, e.g. llama-2-7b-chat')
+    ap.add_argument('--split', default='test', help='signals: which RAGTruth answers (test or train)')
+    ap.add_argument('--no-4bit', action='store_true', help='signals: load the answering model in 16-bit')
+    ap.add_argument('--generators', nargs='+', help='fusion: answering models to use (default: all found)')
+    ap.add_argument('--text', nargs='+', help='fusion: text checkers (default: tiny17m tiny32m tiny68m ld_base)')
+    ap.add_argument('--folds', type=int, default=5, help='fusion: cross-validation folds')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
-    if args.step not in ('models', 'table') and not args.name:
+    if args.step not in ('models', 'table', 'signals', 'fusion') and not args.name:
         ap.error('--name is required')
+    if args.step == 'signals' and not args.generator:
+        ap.error('signals needs --generator')
     if args.name and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.name):
         ap.error('--name may use letters, digits, ".", "_" and "-"')
     if args.step == 'train' and not args.base:
@@ -342,7 +476,8 @@ def main():
         p['onnx'] = args.onnx_dir
         os.makedirs(p['onnx'], exist_ok=True)
     {'models': cmd_models, 'score': cmd_score, 'export': cmd_export, 'check8bit': cmd_check8bit,
-     'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table}[args.step](args, p)
+     'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
+     'fusion': cmd_fusion}[args.step](args, p)
 
 
 if __name__ == '__main__':

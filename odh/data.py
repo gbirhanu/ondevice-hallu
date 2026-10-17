@@ -30,6 +30,7 @@ def load_ragtruth(data_dir):
             s = sources[r['source_id']]
             samples.append({'id': str(r['id']), 'source_id': str(r['source_id']),
                             'task': TASKS[s['task_type']], 'split': r['split'],
+                            'model': r.get('model', ''),          # the model that wrote the answer
                             'prompt': s['prompt'], 'answer': r['response'],
                             'spans': [(int(x['start']), int(x['end'])) for x in r['labels']]})
     return samples
