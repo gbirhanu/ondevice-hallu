@@ -15,8 +15,8 @@ Each version is reported three ways:
   f1_tuned  span F1 with the cut-off that gives the best span F1 on the other four folds
             (the same rule for every version, including the text checker as published).
 
-Versions: text, probability only (the checker's probability alone, no neighbours or
-position, to see what re-learning alone costs); text (with neighbours and position);
+Versions: text, probability only (the checker's probability alone); text (with its
+neighbours' probabilities);
 confidence; attention; confidence+attention; text+confidence; text+attention;
 text+confidence+attention.
 """
@@ -76,10 +76,10 @@ def align(offsets, gen_offsets, values):
 
 
 def token_table(sample, tokens, rec):
-    """Feature blocks (P, T, C, A, base) and labels for one answer's checker tokens."""
+    """Feature blocks (P, T, C, A) and labels for one answer's checker tokens. No answer length or
+    word position: with those, the combiner memorised individual answers (first run)."""
     offsets = np.array([(t[0], t[1]) for t in tokens], dtype=np.float32)
     p = np.clip(np.array([t[2] for t in tokens], dtype=np.float32), 1e-5, 1 - 1e-5)
-    n = len(p)
     conf_g, att_g = generator_features(rec)
     conf = align(offsets, rec['gen_offsets'].astype(np.float32), conf_g)
     att = align(offsets, rec['gen_offsets'].astype(np.float32), att_g)
@@ -90,10 +90,9 @@ def token_table(sample, tokens, rec):
     C = np.concatenate([conf, np.stack([_window(lp, 3), _window(ent, 3), _window(lp, 3, 'min')], 1)], 1)
     look_all = att[:, :BINS].mean(1)
     A = np.concatenate([att, np.stack([_window(look_all, 3), _window(look_all, 3, 'min')], 1)], 1)
-    base = np.stack([np.arange(n) / max(n - 1, 1), np.full(n, np.log(n + 1))], 1).astype(np.float32)
     y = np.array([1 if any(e > gs and s < ge for gs, ge in sample['spans']) else 0
                   for s, e in offsets], dtype=np.int8)
-    return {'P': P, 'T': T, 'C': C, 'A': A, 'base': base}, y
+    return {'P': P, 'T': T, 'C': C, 'A': A}, y
 
 
 def folds_of(samples, folds=5):
@@ -109,8 +108,7 @@ def folds_of(samples, folds=5):
 def cross_validate(blocks, labels, groups, fold, seed=0, max_iter=200):
     """Out-of-fold token probabilities for one version (its list of feature blocks)."""
     from sklearn.ensemble import HistGradientBoostingClassifier
-    use_base = 'P' not in groups
-    X = [np.concatenate([b[g] for g in groups] + ([b['base']] if use_base else []), 1) for b in blocks]
+    X = [np.concatenate([b[g] for g in groups], 1) for b in blocks]
     probs = [None] * len(blocks)
     for k in sorted(set(fold)):
         tr, te = np.where(fold != k)[0], np.where(fold == k)[0]
