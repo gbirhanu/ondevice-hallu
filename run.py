@@ -9,6 +9,10 @@
     python run.py table                           # results/table.md and results/ladder.png
     python run.py signals --generator llama-2-7b-chat   # the answering model's signals (GPU)
     python run.py fusion                          # do those signals add to text checkers?
+    python run.py teach  --name ld_large          # teacher's word probabilities (training answers)
+    python run.py generate --generator qwen2.5-1.5b    # new answers from a small model (GPU)
+    python run.py train  --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
+    python run.py distill                         # table of the teacher-student test
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -38,7 +42,7 @@ LADDER = [
 
 
 def paths(work):
-    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals')}
+    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals', 'extra')}
     for d in p.values():
         os.makedirs(d, exist_ok=True)
     return p
@@ -277,20 +281,226 @@ def cpu_name():
         return platform.processor() or platform.machine()
 
 
+def teacher_tokens(p, teacher, tag):
+    """{answer id: [(start, end, p)]} saved by "teach" for one set of answers."""
+    path = os.path.join(p['preds'], f'{teacher}_{tag}.json.gz')
+    if not os.path.exists(path):
+        raise SystemExit(f'No teacher labels in {path}: run "teach --name {teacher}" first.')
+    with gzip.open(path, 'rt', encoding='utf-8') as fh:
+        record = json.load(fh)
+    return dict(zip(record['ids'], record['tokens']))
+
+
+def with_teacher(samples, labels, what):
+    missing = [s['id'] for s in samples if s['id'] not in labels]
+    if missing:
+        raise SystemExit(f'{len(missing)} {what} have no teacher labels (e.g. {missing[0]}): run "teach" again.')
+    return [{**s, 'teacher': labels[s['id']]} for s in samples]
+
+
 def cmd_train(args, p):
     out = os.path.join(p['results'], f'{args.name}_training.json')
     if done(out, args):
         return
+    from odh import distill
     from odh.model import train
-    train_set, dev, _ = data.splits(data.load_ragtruth(args.data_dir))
-    train_set, dev = data.subset(train_set, args.limit), data.subset(dev, args.limit and max(args.limit // 5, 20))
+    full_train, dev, _ = data.splits(data.load_ragtruth(args.data_dir))
+    train_set, dev = data.subset(full_train, args.limit), data.subset(dev, args.limit and max(args.limit // 5, 20))
+    human = len(train_set)
+    extra_counts = {}
+    if args.teacher:                         # teacher-student: soft labels, and new answers
+        train_set = with_teacher(train_set, teacher_tokens(p, args.teacher, 'train'), 'training answers')
+        sources = {s['source_id']: s for s in full_train}
+        for g in args.extra or []:
+            extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
+            extra = data.subset(extra, args.limit)
+            if not extra:
+                raise SystemExit(f'No answers from {g}: run "generate --generator {g}" first.')
+            train_set += with_teacher(extra, teacher_tokens(p, args.teacher, f'extra_{g}'), f'answers of {g}')
+            extra_counts[g] = len(extra)
     folder = os.path.join(p['models'], args.name)
-    history = train(args.base, train_set, dev, folder, epochs=args.epochs, lr=args.lr,
-                    max_length=args.max_length, batch_tokens=args.batch_tokens, seed=args.seed,
-                    device=device())
+    t0 = time.time()
+    res = train(args.base, train_set, dev, folder, epochs=args.epochs, lr=args.lr, max_length=args.max_length,
+                batch_tokens=args.batch_tokens, seed=args.seed, alpha=args.alpha if args.teacher else 1.0,
+                device=device())
     write_json(out, {'name': args.name, 'base': args.base, 'epochs': args.epochs, 'lr': args.lr,
-                     'seed': args.seed, 'train_answers': len(train_set), 'history': history})
-    print(f'Saved the best epoch to {folder}. Next: python run.py score --name {args.name}')
+                     'seed': args.seed, 'teacher': args.teacher, 'alpha': args.alpha if args.teacher else 1.0,
+                     'extra': extra_counts, 'train_answers': human, 'extra_answers': sum(extra_counts.values()),
+                     'dev_answers': len(dev), 'seconds': round(time.time() - t0), **res})
+    print(f'Saved the best epoch ({res["best_epoch"]}) to {folder}: dev span F1 {res["dev_f1_05"]} at 0.5, '
+          f'{res["dev_f1_at_cutoff"]} at the dev cut-off {res["dev_cutoff"]}. '
+          f'Next: python run.py score --name {args.name}')
+
+
+def cmd_generate(args, p):
+    """New answers from a small (phone-sized) model to RAGTruth's training prompts (odh/distill.py).
+    No person labels them; the teacher does ("teach")."""
+    import math
+    from odh import distill
+    gen = args.generator
+    hf_id = args.model or distill.SMALL_GENERATORS.get(gen)
+    if hf_id is None:
+        raise SystemExit(f'Unknown small model {gen}; known: {", ".join(distill.SMALL_GENERATORS)} (or pass --model).')
+    full_train, _, _ = data.splits(data.load_ragtruth(args.data_dir))
+    items = data.subset(distill.extra_prompts(full_train), args.limit)
+    folder = os.path.join(p['extra'], gen if args.limit is None else f'{gen}_limit{args.limit}')
+    out = os.path.join(p['results'], f'extra_{gen}.json' if args.limit is None else f'extra_{gen}_limit{args.limit}.json')
+    chunks = math.ceil(len(items) / 64)
+    have = len([f for f in os.listdir(folder) if f.endswith('.json.gz')]) if os.path.isdir(folder) else 0
+    if have >= chunks and os.path.exists(out) and not args.redo:
+        print(f'Already done: {folder} ({have} chunk files).')
+        return
+    seconds = 0.0
+    if have < chunks:
+        try:
+            tok, model = distill.load_small_generator(hf_id, device())
+        except Exception as err:                       # not found, or no access (licence not accepted)
+            raise SystemExit(f'Could not load {hf_id}: {type(err).__name__}: {str(err)[:300]}')
+        print(f'Writing answers with {gen} ({hf_id}) to {len(items)} training prompts.')
+        seconds = distill.generate_all(model, tok, items, folder, max_new_tokens=args.max_new_tokens)
+    sources = {s['source_id']: s for s in full_train}
+    extra, dropped = distill.load_extra(folder, gen, sources)
+    words = [len(s['answer'].split()) for s in extra]
+    write_json(out, {'generator': gen, 'hf_id': hf_id, 'prompts': len(items), 'kept': len(extra),
+                     'dropped_unfinished_or_empty': dropped, 'mean_words': round(sum(words) / max(len(words), 1), 1),
+                     'max_new_tokens': args.max_new_tokens, 'seconds': round(seconds)})
+    print(f'{gen}: {len(extra)} answers kept, {dropped} left out (unfinished or empty); '
+          f'{sum(words) / max(len(words), 1):.0f} words on average.')
+
+
+def cmd_teach(args, p):
+    """The teacher's word probabilities for RAGTruth's training answers and for every set of new
+    answers found in <work-dir>/extra (or --generators). Saved in preds/<teacher>_<set>.json.gz."""
+    from odh import distill
+    from odh.model import load, predict
+    full_train, _, _ = data.splits(data.load_ragtruth(args.data_dir))
+    jobs = [('train', data.subset(full_train, args.limit))]
+    sources = {s['source_id']: s for s in full_train}
+    gens = args.generators or sorted(d for d in os.listdir(p['extra'])
+                                     if os.path.isdir(os.path.join(p['extra'], d)) and '_limit' not in d)
+    for g in gens:
+        extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
+        if extra:
+            jobs.append((f'extra_{g}', data.subset(extra, args.limit)))
+    todo = []
+    for tag, samples in jobs:
+        path = os.path.join(p['preds'], f'{args.name}_{tag}.json.gz')
+        if os.path.exists(path) and not args.redo:
+            with gzip.open(path, 'rt', encoding='utf-8') as fh:
+                have = set(json.load(fh)['ids'])
+            if {s['id'] for s in samples} <= have:
+                print(f'Already done: {path}')
+                continue
+        todo.append((path, tag, samples))
+    if not todo:
+        return
+    name = model_of(p, args.name, args.model)
+    tok, model = load(name, device())
+    for path, tag, samples in todo:
+        t0 = time.time()
+        print(f'Teacher {name} on {len(samples)} answers ({tag}).')
+        tokens = predict(model, tok, samples, args.max_length, log=print)
+        save_preds(path, [s['id'] for s in samples], tokens)
+        print(f'  saved {path} ({time.time() - t0:.0f}s)')
+
+
+def cmd_distill(args, p):
+    """Table of the teacher-student test (results/distill.md, distill.json): every trained run
+    next to the human-labels-only run of the same size, the published TinyLettuce of that size
+    and the teacher, on the same test answers."""
+    _, _, test = data.splits(data.load_ragtruth(args.data_dir))
+    res = p['results']
+    runs = []
+    for f in sorted(os.listdir(res)):
+        if f.endswith('_training.json'):
+            t = read_json(os.path.join(res, f))
+            if os.path.exists(os.path.join(p['preds'], f'{t["name"]}_test.json.gz')) and 'dev_cutoff' in t:
+                if not args.names or t['name'] in args.names:
+                    runs.append(t)
+    if not runs:
+        raise SystemExit('No trained and scored runs yet: run "train" and then "score" first.')
+
+    def size_of(base):
+        m = re.search(r'(\d+)m\b', base.lower())
+        return m.group(1) + 'm' if m else 'other'
+
+    names = {t['name'] for t in runs}
+    published = {f'tiny{size_of(t["base"])}' for t in runs} | {'ld_large'}
+    present = [n for n in sorted(published) if os.path.exists(os.path.join(p['preds'], f'{n}_test.json.gz'))]
+    ids = None
+    for n in sorted(names) + present:                           # answers that every model has scored
+        with gzip.open(os.path.join(p['preds'], f'{n}_test.json.gz'), 'rt', encoding='utf-8') as fh:
+            got = set(json.load(fh)['ids'])
+        ids = got if ids is None else ids & got
+    test = [s for s in test if s['id'] in ids]
+    tokens = {n: load_preds(os.path.join(p['preds'], f'{n}_test.json.gz'), test) for n in sorted(names) + present}
+
+    def summary(n, cut):
+        sp = all_spans(tokens[n], cut)
+        s = score(sp, test)
+        return sp, {'f1': s['all'][2], 'p': s['all'][0], 'r': s['all'][1], 'ci': bootstrap(sp, test),
+                    'tasks': {t: v[2] for t, v in s.items() if t != 'all'}}
+
+    def describe(t):
+        if not t['teacher']:
+            return 'human labels'
+        text = f'human + teacher (alpha {t["alpha"]})'
+        if t['extra_answers']:
+            text += f' + {t["extra_answers"]:,} new answers ({", ".join(t["extra"])})'
+        return text
+
+    out, lines = {'answers': len(test), 'rows': []}, []
+    head = ('| Model | Learned from | Span F1 at 0.5 [95% CI] | Span F1 at dev cut-off | QA | Summary | Data2text '
+            '| vs human-labels run, 0.5 [CI] | vs human-labels run, dev cut-off [CI] | vs TinyLettuce, 0.5 [CI] |')
+    lines += [head, '|' + '---|' * 10]
+    if 'ld_large' in present:
+        _, s = summary('ld_large', 0.5)
+        out['rows'].append({'name': 'ld_large', 'role': 'teacher', **s})
+        lines.append(f'| LettuceDetect-large (teacher) | human labels (published) | {s["f1"]} {list(s["ci"])} |  | '
+                     f'{s["tasks"].get("qa", "")} | {s["tasks"].get("summary", "")} | {s["tasks"].get("data2text", "")} |  |  |  |')
+    for size in sorted({size_of(t['base']) for t in runs}, key=lambda x: int(x[:-1]) if x[:-1].isdigit() else 0):
+        group = [t for t in runs if size_of(t['base']) == size]
+        group.sort(key=lambda t: (bool(t['teacher']), t['extra_answers'], t['name']))
+        control = next((t for t in group if not t['teacher']), None)
+        tiny = f'tiny{size}' if f'tiny{size}' in present else None
+        tiny_sp = None
+        if tiny:
+            tiny_sp, s = summary(tiny, 0.5)
+            out['rows'].append({'name': tiny, 'role': 'published', **s})
+            lines.append(f'| TinyLettuce {size.upper()} (published) | human + 3k synthetic | {s["f1"]} {list(s["ci"])} |  | '
+                         f'{s["tasks"].get("qa", "")} | {s["tasks"].get("summary", "")} | {s["tasks"].get("data2text", "")} |  |  |  |')
+        ctrl = None
+        if control:
+            ctrl = (all_spans(tokens[control['name']], 0.5), all_spans(tokens[control['name']], control['dev_cutoff']))
+        for t in group:
+            sp05, s05 = summary(t['name'], 0.5)
+            spc, sc = summary(t['name'], t['dev_cutoff'])
+            row = {'name': t['name'], 'role': 'trained', 'learned_from': describe(t), **s05,
+                   'dev_cutoff': t['dev_cutoff'], 'f1_dev_cutoff': sc['f1'], 'ci_dev_cutoff': sc['ci']}
+            g05 = gcut = gtiny = ''
+            if ctrl and t is not control:
+                row['vs_control_05'] = round(s05['f1'] - score(ctrl[0], test)['all'][2], 2)
+                row['vs_control_05_ci'] = bootstrap(sp05, test, base=ctrl[0])
+                row['vs_control_cut'] = round(sc['f1'] - score(ctrl[1], test)['all'][2], 2)
+                row['vs_control_cut_ci'] = bootstrap(spc, test, base=ctrl[1])
+                g05 = f'{row["vs_control_05"]:+.2f} {list(row["vs_control_05_ci"])}'
+                gcut = f'{row["vs_control_cut"]:+.2f} {list(row["vs_control_cut_ci"])}'
+            if tiny_sp is not None:
+                row['vs_tiny_05'] = round(s05['f1'] - score(tiny_sp, test)['all'][2], 2)
+                row['vs_tiny_05_ci'] = bootstrap(sp05, test, base=tiny_sp)
+                gtiny = f'{row["vs_tiny_05"]:+.2f} {list(row["vs_tiny_05_ci"])}'
+            out['rows'].append(row)
+            lines.append(f'| {t["name"]} | {describe(t)} | {s05["f1"]} {list(s05["ci"])} | {sc["f1"]} (cut-off {t["dev_cutoff"]}) | '
+                         f'{s05["tasks"].get("qa", "")} | {s05["tasks"].get("summary", "")} | {s05["tasks"].get("data2text", "")} | '
+                         f'{g05} | {gcut} | {gtiny} |')
+    lines.append(f'\nSpan F1 on {len(test)} RAGTruth test answers. Dev cut-off: the cut-off with the best span F1 on '
+                 'the dev answers (held-out training sources), chosen for each trained run. QA, Summary, Data2text: '
+                 'span F1 at 0.5. Changes are in points, with 95% intervals from resampling test sources.')
+    md = '\n'.join(lines)
+    write_json(os.path.join(res, 'distill.json'), out)
+    with open(os.path.join(res, 'distill.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
 
 
 def cmd_signals(args, p):
@@ -437,7 +647,7 @@ def cmd_table(args, p):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
-                                     'signals', 'fusion'])
+                                     'signals', 'fusion', 'teach', 'generate', 'distill'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -455,18 +665,28 @@ def main():
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--batch-tokens', type=int, default=8192)
     ap.add_argument('--limit', type=int, help='use only about N answers (quick checks)')
-    ap.add_argument('--generator', help='signals: RAGTruth name of the answering model, e.g. llama-2-7b-chat')
+    ap.add_argument('--generator', help='signals: RAGTruth name of the answering model, e.g. llama-2-7b-chat; '
+                    'generate: a small model, e.g. qwen2.5-1.5b')
     ap.add_argument('--split', default='test', help='signals: which RAGTruth answers (test or train)')
     ap.add_argument('--no-4bit', action='store_true', help='signals: load the answering model in 16-bit')
-    ap.add_argument('--generators', nargs='+', help='fusion: answering models to use (default: all found)')
+    ap.add_argument('--generators', nargs='+', help='fusion: answering models to use; teach: sets of new '
+                    'answers to label (default: all found)')
     ap.add_argument('--text', nargs='+', help='fusion: text checkers (default: tiny17m tiny32m tiny68m ld_base)')
     ap.add_argument('--folds', type=int, default=5, help='fusion: cross-validation folds')
+    ap.add_argument('--teacher', help='train: run name of the teacher whose labels to learn from, e.g. ld_large')
+    ap.add_argument('--alpha', type=float, default=0.5,
+                    help='train with --teacher: weight of the human label (the teacher gets 1 - alpha)')
+    ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
+    ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
+    ap.add_argument('--names', nargs='+', help='distill: trained runs to show (default: all scored ones)')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
-    if args.step not in ('models', 'table', 'signals', 'fusion') and not args.name:
+    if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill') and not args.name:
         ap.error('--name is required')
-    if args.step == 'signals' and not args.generator:
-        ap.error('signals needs --generator')
+    if args.step in ('signals', 'generate') and not args.generator:
+        ap.error(f'{args.step} needs --generator')
+    if args.extra and not args.teacher:
+        ap.error('--extra needs --teacher (the new answers have no human labels)')
     if args.name and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.name):
         ap.error('--name may use letters, digits, ".", "_" and "-"')
     if args.step == 'train' and not args.base:
@@ -477,7 +697,7 @@ def main():
         os.makedirs(p['onnx'], exist_ok=True)
     {'models': cmd_models, 'score': cmd_score, 'export': cmd_export, 'check8bit': cmd_check8bit,
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
-     'fusion': cmd_fusion}[args.step](args, p)
+     'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill}[args.step](args, p)
 
 
 if __name__ == '__main__':

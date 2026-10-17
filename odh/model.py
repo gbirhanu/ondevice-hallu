@@ -28,7 +28,7 @@ def load(name, device='cpu', new_head=False):
         model = AutoModelForTokenClassification.from_pretrained(name, reference_compile=False, **kwargs)
     except (TypeError, ValueError):
         model = AutoModelForTokenClassification.from_pretrained(name, **kwargs)
-    return tok, model.to(device).eval()
+    return tok, model.float().to(device).eval()      # our trained runs are saved in 16-bit
 
 
 def encode(tok, prompt, answer, max_length=4096):
@@ -90,17 +90,17 @@ def predict(model, tok, samples, max_length=4096, batch_tokens=16384, fp16=True,
     return out
 
 
-def _targets(spans, offsets):
-    return [1.0 if any(e > gs and s < ge for gs, ge in spans) else 0.0 for s, e in offsets]
-
-
 def train(base, train_samples, dev_samples, out_dir, epochs=3, lr=2e-5, max_length=4096,
-          batch_tokens=8192, seed=42, device='cuda', fp16=True, warmup=0.1, log=print):
+          batch_tokens=8192, seed=42, device='cuda', fp16=True, warmup=0.1, alpha=0.5, log=print):
     """Fine-tune `base` as a 2-class token classifier on answer tokens (cross-entropy).
 
-    Keeps the epoch with the best dev span F1 at the plain 0.5 cut-off and saves only that
-    model to out_dir, once, at the end. Returns the per-epoch history.
+    Targets come from odh.distill.targets_for: the human label; or, when a sample carries the
+    teacher's word probabilities ('teacher'), alpha * human + (1 - alpha) * teacher; or, for answers
+    no person labelled (spans None), the teacher alone. Keeps the epoch with the best dev span F1
+    at the plain 0.5 cut-off and saves only that model to out_dir (16-bit), once, at the end.
+    Returns the per-epoch history and the cut-off that is best on dev for the kept epoch.
     """
+    from odh.distill import best_cutoff, targets_for
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -109,7 +109,8 @@ def train(base, train_samples, dev_samples, out_dir, epochs=3, lr=2e-5, max_leng
     data = []
     for s in train_samples:
         ids, positions, offsets = encode(tok, s['prompt'], s['answer'], max_length)
-        data.append((ids, positions, _targets(s['spans'], offsets)))
+        if positions:
+            data.append((ids, positions, targets_for(s, offsets, alpha)))
     lengths = [len(d[0]) for d in data]
     rng = random.Random(seed)
 
@@ -128,7 +129,7 @@ def train(base, train_samples, dev_samples, out_dir, epochs=3, lr=2e-5, max_leng
     use_amp = fp16 and device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else 0
-    best_f1, best_state, history = -1.0, None, []
+    best_f1, best_state, best_dev, history = -1.0, None, None, []
     log(f'Training {base} on {len(data)} answers for {epochs} epochs ({steps} steps).')
     for ep in range(epochs):
         model.train()
@@ -160,9 +161,11 @@ def train(base, train_samples, dev_samples, out_dir, epochs=3, lr=2e-5, max_leng
                         'seconds': round(time.time() - t0)})
         log(f'Epoch {ep + 1}: loss {total / max(seen, 1):.4f}, dev span F1 {f1:.2f}')
         if f1 > best_f1:
-            best_f1 = f1
+            best_f1, best_dev = f1, dev_tokens
             best_state = {k: v.detach().to('cpu', copy=True) for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    model.save_pretrained(out_dir)
+    model.half().save_pretrained(out_dir)
     tok.save_pretrained(out_dir)
-    return history
+    cut, f1_cut, _ = best_cutoff(best_dev, dev_samples)
+    return {'history': history, 'best_epoch': max(history, key=lambda h: h['dev_span_f1'])['epoch'],
+            'dev_f1_05': best_f1, 'dev_cutoff': cut, 'dev_f1_at_cutoff': f1_cut}

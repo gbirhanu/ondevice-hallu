@@ -48,6 +48,20 @@ and scored the same way (5-fold cross-validation split by source; `odh/fusion.py
 `results/fusion.md`: token average precision (cut-off free), span F1 at 0.5, and span F1 with
 the cut-off chosen on the other folds. It needs the size ladder's `preds` folder.
 
+## Teacher-student test (distillation)
+
+`colab/distill.ipynb` asks whether a small checker learns more from a big one than from the
+human labels alone. The teacher is LettuceDetect-large (396M); the students are Ettin 17M and 68M,
+the encoders TinyLettuce is built on. The teacher gives (1) soft labels, its probability for every
+word of RAGTruth's training answers, used half and half with the human label, and (2) labels for
+new answers that small, phone-sized models (Qwen2.5 0.5B/1.5B, SmolLM2 1.7B) write to RAGTruth's
+training prompts (never the test prompts). Three students per size are trained the same way:
+human labels only (`hard`), + soft labels (`soft`), + new answers (`kd`). The two models cut words
+into tokens differently, so the teacher's probabilities are matched to the student's tokens by
+character overlap (`odh/distill.py`). Results: `results/distill.md`: span F1 at 0.5 and at the
+cut-off chosen on the dev answers, each student against the human-labels-only student and the
+published TinyLettuce of the same size, with 95% intervals.
+
 ## Commands
 
 ```
@@ -60,6 +74,10 @@ python run.py table                                # results/table.md + results/
 python run.py train     --name mine68m --base jhu-clsp/ettin-encoder-68m   # our own model
 python run.py signals   --generator llama-2-7b-chat    # answering-model signals (GPU, 4-bit)
 python run.py fusion                               # do the signals add to the text checkers?
+python run.py teach     --name ld_large            # teacher's word probabilities (training + new answers)
+python run.py generate  --generator qwen2.5-1.5b   # new answers from a small model (GPU)
+python run.py train     --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
+python run.py distill                              # table of the teacher-student test
 ```
 
 All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the
@@ -76,6 +94,7 @@ All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: co
 | `odh/cpu.py` | ONNX export, 8-bit quantization, CPU prediction and timing |
 | `odh/signals.py` | The answering model's confidence and attention for every answer token |
 | `odh/fusion.py` | Text checker + answering-model signals: cross-validated comparison |
+| `odh/distill.py` | Teacher-student training: new answers from small models, teacher targets for the student |
 | `run.py` | The commands above |
 
 Checks without a GPU or downloads: `python -m pytest tests -q` and, for an end-to-end run,
