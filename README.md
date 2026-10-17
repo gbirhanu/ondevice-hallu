@@ -45,7 +45,8 @@ per answer token: confidence (log-probability, entropy, gaps to the top token) a
 ratio of every layer (`odh/signals.py`). It then combines these with the text checkers' scores
 from the size ladder and compares text only, + confidence, + attention and + both, all trained
 and scored the same way (5-fold cross-validation split by source; `odh/fusion.py`). Results:
-`results/fusion.md`. It needs the size ladder's `preds` folder.
+`results/fusion.md`: token average precision (cut-off free), span F1 at 0.5, and span F1 with
+the cut-off chosen on the other folds. It needs the size ladder's `preds` folder.
 
 ## Commands
 

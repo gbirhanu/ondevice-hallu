@@ -105,12 +105,17 @@ class Fusion(unittest.TestCase):
                             'model': 'llama-2-7b-chat', 'spans': spans})
             toks.append([(a, b, float(q)) for (a, b), q in zip(offsets, p)])
             records[str(i)] = {'gen_offsets': np.array(offsets, np.int32), 'conf': conf, 'look': look}
-        res = fusion.run(samples, {'weak': toks}, records, versions=['text', 'text+confidence'],
-                         folds=3, log=lambda *_: None)
-        text = res['weak']['versions']['text']['span_f1']
-        both = res['weak']['versions']['text+confidence']['span_f1']
-        self.assertGreater(both, text + 10)
-        self.assertIn('gain_over_text_ci95', res['weak']['versions']['text+confidence'])
+        res = fusion.run(samples, {'weak': toks}, records,
+                         versions=['text, probability only', 'text', 'text+confidence'], folds=3,
+                         log=lambda *_: None)
+        v = res['weak']['versions']
+        self.assertGreater(v['text+confidence']['f1_tuned'], v['text']['f1_tuned'] + 10)
+        self.assertGreater(v['text+confidence']['ap'], v['text']['ap'] + 10)
+        self.assertIn('gain_tuned_ci95', v['text+confidence'])
+        self.assertIn('as published', v)
+        # the published probabilities and their re-learned version rank tokens about equally well
+        self.assertLess(abs(v['as published']['ap'] - v['text, probability only']['ap']), 10)
+        self.assertEqual(set(v['text']['cutoffs']), {0, 1, 2})
         self.assertIn('| weak | text+confidence |', fusion.table(res))
 
 
