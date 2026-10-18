@@ -20,6 +20,7 @@ Results are small JSON files in --work-dir/results; nothing else is ever overwri
 import argparse
 import gzip
 import json
+import math
 import os
 import re
 import sys
@@ -449,40 +450,53 @@ def cmd_distill(args, p):
             text += f' + {t["extra_answers"]:,} new answers ({", ".join(t["extra"])})'
         return text
 
+    def updates(t):                         # answers seen in training: epochs x (human + new answers)
+        return t['epochs'] * (t['train_answers'] + t['extra_answers'])
+
+    def control_of(t, group):
+        """The human-labels-only run of the same size that saw about as many answers in training."""
+        hard = [c for c in group if not c['teacher']]
+        if not t['teacher'] or not hard:
+            return None
+        return min(hard, key=lambda c: (abs(math.log(updates(t) / updates(c))), c['name']))
+
+    def cells(s):
+        return f'{s["tasks"].get("qa", "")} | {s["tasks"].get("summary", "")} | {s["tasks"].get("data2text", "")}'
+
     out, lines = {'answers': len(test), 'rows': []}, []
-    head = ('| Model | Learned from | Span F1 at 0.5 [95% CI] | Span F1 at dev cut-off | QA | Summary | Data2text '
-            '| vs human-labels run, 0.5 [CI] | vs human-labels run, dev cut-off [CI] | vs TinyLettuce, 0.5 [CI] |')
-    lines += [head, '|' + '---|' * 10]
+    head = ('| Model | Learned from | Epochs | Span F1 at 0.5 [95% CI] | Span F1 at dev cut-off | QA | Summary | Data2text '
+            '| Compared with | Change, 0.5 [CI] | Change, dev cut-off [CI] | vs TinyLettuce, 0.5 [CI] |')
+    lines += [head, '|' + '---|' * 12]
     if 'ld_large' in present:
         _, s = summary('ld_large', 0.5)
         out['rows'].append({'name': 'ld_large', 'role': 'teacher', **s})
-        lines.append(f'| LettuceDetect-large (teacher) | human labels (published) | {s["f1"]} {list(s["ci"])} |  | '
-                     f'{s["tasks"].get("qa", "")} | {s["tasks"].get("summary", "")} | {s["tasks"].get("data2text", "")} |  |  |  |')
+        lines.append(f'| LettuceDetect-large (teacher) | human labels (published) |  | {s["f1"]} {list(s["ci"])} |  | '
+                     f'{cells(s)} |  |  |  |  |')
     for size in sorted({size_of(t['base']) for t in runs}, key=lambda x: int(x[:-1]) if x[:-1].isdigit() else 0):
         group = [t for t in runs if size_of(t['base']) == size]
-        group.sort(key=lambda t: (bool(t['teacher']), t['extra_answers'], t['name']))
-        control = next((t for t in group if not t['teacher']), None)
+        group.sort(key=lambda t: (bool(t['teacher']), t['extra_answers'], t['epochs'], t['name']))
         tiny = f'tiny{size}' if f'tiny{size}' in present else None
         tiny_sp = None
         if tiny:
             tiny_sp, s = summary(tiny, 0.5)
             out['rows'].append({'name': tiny, 'role': 'published', **s})
-            lines.append(f'| TinyLettuce {size.upper()} (published) | human + 3k synthetic | {s["f1"]} {list(s["ci"])} |  | '
-                         f'{s["tasks"].get("qa", "")} | {s["tasks"].get("summary", "")} | {s["tasks"].get("data2text", "")} |  |  |  |')
-        ctrl = None
-        if control:
-            ctrl = (all_spans(tokens[control['name']], 0.5), all_spans(tokens[control['name']], control['dev_cutoff']))
+            lines.append(f'| TinyLettuce {size.upper()} (published) | human + 3k synthetic | 5 | {s["f1"]} {list(s["ci"])} |  | '
+                         f'{cells(s)} |  |  |  |  |')
         for t in group:
             sp05, s05 = summary(t['name'], 0.5)
             spc, sc = summary(t['name'], t['dev_cutoff'])
-            row = {'name': t['name'], 'role': 'trained', 'learned_from': describe(t), **s05,
+            row = {'name': t['name'], 'role': 'trained', 'learned_from': describe(t), 'epochs': t['epochs'],
+                   'answers_seen': updates(t), **s05,
                    'dev_cutoff': t['dev_cutoff'], 'f1_dev_cutoff': sc['f1'], 'ci_dev_cutoff': sc['ci']}
-            g05 = gcut = gtiny = ''
-            if ctrl and t is not control:
-                row['vs_control_05'] = round(s05['f1'] - score(ctrl[0], test)['all'][2], 2)
-                row['vs_control_05_ci'] = bootstrap(sp05, test, base=ctrl[0])
-                row['vs_control_cut'] = round(sc['f1'] - score(ctrl[1], test)['all'][2], 2)
-                row['vs_control_cut_ci'] = bootstrap(spc, test, base=ctrl[1])
+            g05 = gcut = gtiny = cname = ''
+            c = control_of(t, group)
+            if c:
+                c05, ccut = all_spans(tokens[c['name']], 0.5), all_spans(tokens[c['name']], c['dev_cutoff'])
+                cname = row['control'] = c['name']
+                row['vs_control_05'] = round(s05['f1'] - score(c05, test)['all'][2], 2)
+                row['vs_control_05_ci'] = bootstrap(sp05, test, base=c05)
+                row['vs_control_cut'] = round(sc['f1'] - score(ccut, test)['all'][2], 2)
+                row['vs_control_cut_ci'] = bootstrap(spc, test, base=ccut)
                 g05 = f'{row["vs_control_05"]:+.2f} {list(row["vs_control_05_ci"])}'
                 gcut = f'{row["vs_control_cut"]:+.2f} {list(row["vs_control_cut_ci"])}'
             if tiny_sp is not None:
@@ -490,12 +504,13 @@ def cmd_distill(args, p):
                 row['vs_tiny_05_ci'] = bootstrap(sp05, test, base=tiny_sp)
                 gtiny = f'{row["vs_tiny_05"]:+.2f} {list(row["vs_tiny_05_ci"])}'
             out['rows'].append(row)
-            lines.append(f'| {t["name"]} | {describe(t)} | {s05["f1"]} {list(s05["ci"])} | {sc["f1"]} (cut-off {t["dev_cutoff"]}) | '
-                         f'{s05["tasks"].get("qa", "")} | {s05["tasks"].get("summary", "")} | {s05["tasks"].get("data2text", "")} | '
-                         f'{g05} | {gcut} | {gtiny} |')
+            lines.append(f'| {t["name"]} | {describe(t)} | {t["epochs"]} | {s05["f1"]} {list(s05["ci"])} | '
+                         f'{sc["f1"]} (cut-off {t["dev_cutoff"]}) | {cells(s05)} | {cname} | {g05} | {gcut} | {gtiny} |')
     lines.append(f'\nSpan F1 on {len(test)} RAGTruth test answers. Dev cut-off: the cut-off with the best span F1 on '
                  'the dev answers (held-out training sources), chosen for each trained run. QA, Summary, Data2text: '
-                 'span F1 at 0.5. Changes are in points, with 95% intervals from resampling test sources.')
+                 'span F1 at 0.5. "Compared with": the human-labels-only run of the same size that saw about as many '
+                 'answers in training (epochs x answers), so extra training alone cannot explain a gain. Changes are '
+                 'in points, with 95% intervals from resampling test sources.')
     md = '\n'.join(lines)
     write_json(os.path.join(res, 'distill.json'), out)
     with open(os.path.join(res, 'distill.md'), 'w', encoding='utf-8') as fh:

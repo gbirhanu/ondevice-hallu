@@ -59,8 +59,9 @@ training prompts (never the test prompts). Three students per size are trained t
 human labels only (`hard`), + soft labels (`soft`), + new answers (`kd`). The two models cut words
 into tokens differently, so the teacher's probabilities are matched to the student's tokens by
 character overlap (`odh/distill.py`). Results: `results/distill.md`: span F1 at 0.5 and at the
-cut-off chosen on the dev answers, each student against the human-labels-only student and the
-published TinyLettuce of the same size, with 95% intervals.
+cut-off chosen on the dev answers, each student against the human-labels-only student of the
+same size that saw about as many answers in training (so extra training alone cannot explain a
+gain) and against the published TinyLettuce of the same size, with 95% intervals.
 
 ## Commands
 
