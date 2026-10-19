@@ -22,17 +22,25 @@ import time
 
 import numpy as np
 
-# Small open answering models (phone-sized), tried for the extra answers. The first three
-# download without sign-in; the last two need a Hugging Face token whose account has accepted
-# the model's licence.
-SMALL_GENERATORS = {
+# Open answering models that write the extra answers. Phone-sized ones (0.5-2B) are the method;
+# the large ones (7-8B, loaded in 4-bit) are the comparison: does it matter that the new answers
+# come from the kind of model that will run on the phone? Models marked * need a Hugging Face
+# token whose account has accepted the model's licence.
+ANSWER_MODELS = {
     'qwen2.5-0.5b': 'Qwen/Qwen2.5-0.5B-Instruct',
     'qwen2.5-1.5b': 'Qwen/Qwen2.5-1.5B-Instruct',
     'smollm2-1.7b': 'HuggingFaceTB/SmolLM2-1.7B-Instruct',
-    'llama-3.2-1b': 'meta-llama/Llama-3.2-1B-Instruct',
-    'gemma-2-2b': 'google/gemma-2-2b-it',
+    'llama-3.2-1b': 'meta-llama/Llama-3.2-1B-Instruct',            # *
+    'gemma-2-2b': 'google/gemma-2-2b-it',                            # *
+    'qwen2.5-7b': 'Qwen/Qwen2.5-7B-Instruct',
+    'olmo2-7b': 'allenai/OLMo-2-1124-7B-Instruct',
+    'mistral-7b-v0.3': 'mistralai/Mistral-7B-Instruct-v0.3',         # *
+    'llama-3.1-8b': 'meta-llama/Llama-3.1-8B-Instruct',              # *
 }
+SMALL_GENERATORS = ANSWER_MODELS                                     # older name
+LARGE = {'qwen2.5-7b', 'olmo2-7b', 'mistral-7b-v0.3', 'llama-3.1-8b'}
 DEFAULT_GENERATORS = ['qwen2.5-0.5b', 'qwen2.5-1.5b', 'smollm2-1.7b']
+LARGE_GENERATORS = ['qwen2.5-7b', 'olmo2-7b', 'mistral-7b-v0.3']
 CUTOFFS = np.round(np.arange(0.05, 0.951, 0.05), 2)
 
 
@@ -63,6 +71,27 @@ def soft_targets(offsets, teacher_tokens):
 def hard_targets(spans, offsets):
     """1.0 for a token that overlaps a human-marked span, else 0.0."""
     return [1.0 if any(e > gs and s < ge for gs, ge in spans) else 0.0 for s, e in offsets]
+
+
+def spans_to_tokens(answer, spans):
+    """Labels given as character spans (from people or a language model) in the teacher-token format
+    [(start, end, p)]: the answer cut at whitespace and at span edges, p = 1.0 inside a span."""
+    import re
+    cuts = {0, len(answer)} | {max(0, min(len(answer), x)) for s, e in spans for x in (s, e)}
+    for m in re.finditer(r'\S+', answer):
+        cuts |= {m.start(), m.end()}
+    cuts = sorted(cuts)
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        if answer[a:b].strip():
+            inside = any(a < e and b > s for s, e in spans)
+            out.append((a, b, 1.0 if inside else 0.0))
+    return out
+
+
+def harden(tokens, cutoff=0.5):
+    """Teacher tokens with p rounded to 0 or 1 (to compare soft with hard teacher labels)."""
+    return [(s, e, 1.0 if p > cutoff else 0.0) for s, e, p in tokens]
 
 
 def targets_for(sample, offsets, alpha=0.5):
@@ -101,7 +130,8 @@ def extra_prompts(train_samples):
             for k, v in sorted(first.items(), key=lambda kv: (len(kv[0]), kv[0]))]
 
 
-def load_small_generator(hf_id, device='cuda'):
+def load_small_generator(hf_id, device='cuda', four_bit=False):
+    """An answering model for generation. four_bit: 4-bit NF4 weights (for 7-8B models on a T4)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(hf_id)
@@ -109,11 +139,19 @@ def load_small_generator(hf_id, device='cuda'):
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     dtype = torch.float16 if device == 'cuda' else torch.float32
+    kwargs = {}
+    if four_bit:
+        from transformers import BitsAndBytesConfig
+        kwargs['quantization_config'] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4',
+                                                           bnb_4bit_compute_dtype=torch.float16)
+        kwargs['device_map'] = {'': 0}
     try:
-        model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=dtype)
+        model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=dtype, **kwargs)
     except TypeError:                                   # older transformers call it torch_dtype
-        model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype)
-    return tok, model.to(device).eval()
+        model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype, **kwargs)
+    if not four_bit:
+        model = model.to(device)
+    return tok, model.eval()
 
 
 def chat_text(tok, prompt):

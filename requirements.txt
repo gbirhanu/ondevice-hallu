@@ -9,6 +9,7 @@ huggingface_hub
 psutil
 matplotlib
 scikit-learn
-# the signals step (GPU) also needs: bitsandbytes accelerate
+# the signals step and large answering models (GPU) also need: bitsandbytes accelerate
+# psilo needs: datasets; llmlabel needs: requests
 # checks
 pytest

@@ -13,6 +13,10 @@
     python run.py generate --generator qwen2.5-1.5b    # new answers from a small model (GPU)
     python run.py train  --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
     python run.py distill                         # table of the teacher-student test
+    python run.py generate --generator qwen2.5-7b  # answers from a large model (4-bit), for comparison
+    python run.py llmlabel --name gpt4o --llm-model gpt-4o   # a large LLM labels the new answers (API)
+    python run.py psilo                           # score checkers on PsiloQA, by answer-model size
+    python run.py compare --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -43,7 +47,7 @@ LADDER = [
 
 
 def paths(work):
-    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals', 'extra')}
+    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals', 'extra', 'llm')}
     for d in p.values():
         os.makedirs(d, exist_ok=True)
     return p
@@ -312,12 +316,25 @@ def cmd_train(args, p):
     if args.teacher:                         # teacher-student: soft labels, and new answers
         train_set = with_teacher(train_set, teacher_tokens(p, args.teacher, 'train'), 'training answers')
         sources = {s['source_id']: s for s in full_train}
+        labeller = args.extra_teacher or args.teacher
+        sets = {}
         for g in args.extra or []:
             extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
             extra = data.subset(extra, args.limit)
             if not extra:
                 raise SystemExit(f'No answers from {g}: run "generate --generator {g}" first.')
-            train_set += with_teacher(extra, teacher_tokens(p, args.teacher, f'extra_{g}'), f'answers of {g}')
+            labels = teacher_tokens(p, labeller, f'extra_{g}')
+            sets[g] = [s for s in extra if s['id'] in labels]        # an LLM labeller may skip a few
+            if len(sets[g]) < len(extra):
+                print(f'{g}: {len(extra) - len(sets[g])} answers have no labels from {labeller} and are left out.')
+        total = sum(len(v) for v in sets.values())
+        if args.extra_max and total > args.extra_max:            # same number of new answers in compared runs
+            sets = {g: data.subset(v, round(args.extra_max * len(v) / total)) for g, v in sets.items()}
+        for g, extra in sets.items():
+            labels = teacher_tokens(p, labeller, f'extra_{g}')
+            if args.extra_hard:
+                labels = {k: distill.harden(v) for k, v in labels.items()}
+            train_set += with_teacher(extra, labels, f'answers of {g}')
             extra_counts[g] = len(extra)
     folder = os.path.join(p['models'], args.name)
     t0 = time.time()
@@ -326,7 +343,8 @@ def cmd_train(args, p):
                 device=device())
     write_json(out, {'name': args.name, 'base': args.base, 'epochs': args.epochs, 'lr': args.lr,
                      'seed': args.seed, 'teacher': args.teacher, 'alpha': args.alpha if args.teacher else 1.0,
-                     'extra': extra_counts, 'train_answers': human, 'extra_answers': sum(extra_counts.values()),
+                     'extra_teacher': (args.extra_teacher or args.teacher) if extra_counts else None,
+                     'extra_hard': bool(args.extra_hard and extra_counts), 'extra': extra_counts, 'train_answers': human, 'extra_answers': sum(extra_counts.values()),
                      'dev_answers': len(dev), 'seconds': round(time.time() - t0), **res})
     print(f'Saved the best epoch ({res["best_epoch"]}) to {folder}: dev span F1 {res["dev_f1_05"]} at 0.5, '
           f'{res["dev_f1_at_cutoff"]} at the dev cut-off {res["dev_cutoff"]}. '
@@ -339,9 +357,10 @@ def cmd_generate(args, p):
     import math
     from odh import distill
     gen = args.generator
-    hf_id = args.model or distill.SMALL_GENERATORS.get(gen)
+    hf_id = args.model or distill.ANSWER_MODELS.get(gen)
     if hf_id is None:
-        raise SystemExit(f'Unknown small model {gen}; known: {", ".join(distill.SMALL_GENERATORS)} (or pass --model).')
+        raise SystemExit(f'Unknown answering model {gen}; known: {", ".join(distill.ANSWER_MODELS)} (or pass --model).')
+    four_bit = gen in distill.LARGE or args.four_bit
     full_train, _, _ = data.splits(data.load_ragtruth(args.data_dir))
     items = data.subset(distill.extra_prompts(full_train), args.limit)
     folder = os.path.join(p['extra'], gen if args.limit is None else f'{gen}_limit{args.limit}')
@@ -354,15 +373,15 @@ def cmd_generate(args, p):
     seconds = 0.0
     if have < chunks:
         try:
-            tok, model = distill.load_small_generator(hf_id, device())
+            tok, model = distill.load_small_generator(hf_id, device(), four_bit=four_bit)
         except Exception as err:                       # not found, or no access (licence not accepted)
             raise SystemExit(f'Could not load {hf_id}: {type(err).__name__}: {str(err)[:300]}')
-        print(f'Writing answers with {gen} ({hf_id}) to {len(items)} training prompts.')
+        print(f'Writing answers with {gen} ({hf_id}{", 4-bit" if four_bit else ""}) to {len(items)} training prompts.')
         seconds = distill.generate_all(model, tok, items, folder, max_new_tokens=args.max_new_tokens)
     sources = {s['source_id']: s for s in full_train}
     extra, dropped = distill.load_extra(folder, gen, sources)
     words = [len(s['answer'].split()) for s in extra]
-    write_json(out, {'generator': gen, 'hf_id': hf_id, 'prompts': len(items), 'kept': len(extra),
+    write_json(out, {'generator': gen, 'hf_id': hf_id, 'four_bit': four_bit, 'prompts': len(items), 'kept': len(extra),
                      'dropped_unfinished_or_empty': dropped, 'mean_words': round(sum(words) / max(len(words), 1), 1),
                      'max_new_tokens': args.max_new_tokens, 'seconds': round(seconds)})
     print(f'{gen}: {len(extra)} answers kept, {dropped} left out (unfinished or empty); '
@@ -518,6 +537,197 @@ def cmd_distill(args, p):
     print(md)
 
 
+def extra_sets(p):
+    """Names of the answering models whose new answers are in <work-dir>/extra."""
+    return sorted(d for d in os.listdir(p['extra']) if os.path.isdir(os.path.join(p['extra'], d)) and '_limit' not in d)
+
+
+def cmd_llmlabel(args, p):
+    """A large language model labels answers the PsiloQA way (odh/llmlabel.py): the new answers of
+    the answering models (--on extra, for training), or a fixed subset of RAGTruth test answers
+    (--on test, to measure the labeller against people). Labels are saved like a teacher's:
+    preds/<name>_extra_<answering model>.json.gz, or preds/<name>_test.json.gz."""
+    from odh import distill, llmlabel
+    key = os.environ.get(args.api_key_env)
+    if not key:
+        raise SystemExit(f'No API key: put it in the environment variable {args.api_key_env} '
+                         '(on Colab: the Secrets panel, then the notebook copies it).')
+    full_train, _, test = data.splits(data.load_ragtruth(args.data_dir))
+
+    def ask(sample):
+        return llmlabel.call(args.llm_model, llmlabel.messages(sample['prompt'], sample['answer']), args.api_base, key)
+
+    if args.on == 'test':
+        jobs = [('test', data.subset(test, args.limit or 300))]
+    else:
+        sources = {s['source_id']: s for s in full_train}
+        jobs = []
+        for g in args.generators or extra_sets(p):
+            extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
+            if extra:
+                jobs.append((f'extra_{g}', data.subset(extra, args.limit)))
+    for tag, samples in jobs:
+        folder = os.path.join(p['llm'], args.name, tag)
+        print(f'{args.llm_model} labels {len(samples)} answers ({tag}).')
+        t_in, t_out = llmlabel.label_all(samples, folder, ask, workers=args.workers)
+        replies = llmlabel.load_replies(folder)
+        ids, tokens, found, unusable = [], [], {}, 0
+        for s in samples:
+            spans = llmlabel.parse(replies.get(s['id']), s['answer'])
+            if spans is None:
+                unusable += 1
+                continue
+            ids.append(s['id'])
+            tokens.append(distill.spans_to_tokens(s['answer'], spans))
+            found[s['id']] = spans
+        save_preds(os.path.join(p['preds'], f'{args.name}_{tag}.json.gz'), ids, tokens)
+        info = {'labeller': args.name, 'llm_model': args.llm_model, 'api_base': args.api_base, 'set': tag,
+                'answers': len(samples), 'labelled': len(ids), 'unusable_replies': unusable,
+                'answers_with_spans': sum(1 for v in found.values() if v),
+                'tokens_in_this_run': t_in, 'tokens_out_this_run': t_out}
+        if tag == 'test':                     # how good is the labeller, against people and our teacher?
+            kept = [s for s in samples if s['id'] in found]
+            spans = [found[s['id']] for s in kept]
+            sc = score(spans, kept)
+            info['labeller_vs_people'] = {'span_f1': sc['all'][2], 'precision': sc['all'][0], 'recall': sc['all'][1],
+                                          'ci95': bootstrap(spans, kept), 'by_task': {t: v[2] for t, v in sc.items() if t != 'all'}}
+            teacher = os.path.join(p['preds'], 'ld_large_test.json.gz')
+            if os.path.exists(teacher):
+                tspans = all_spans(load_preds(teacher, kept))
+                tsc = score(tspans, kept)
+                info['teacher_vs_people_same_answers'] = {'span_f1': tsc['all'][2], 'ci95': bootstrap(tspans, kept),
+                                                          'by_task': {t: v[2] for t, v in tsc.items() if t != 'all'}}
+                info['labeller_minus_teacher_ci95'] = bootstrap(spans, kept, base=tspans)
+        write_json(os.path.join(p['results'], f'llmlabel_{args.name}_{tag}.json'), info)
+        line = f'{tag}: {len(ids)} of {len(samples)} answers labelled, {unusable} replies unusable'
+        if 'labeller_vs_people' in info:
+            line += (f'; span F1 against people {info["labeller_vs_people"]["span_f1"]}'
+                     + (f' (our teacher on the same answers: {info["teacher_vs_people_same_answers"]["span_f1"]})'
+                        if 'teacher_vs_people_same_answers' in info else ''))
+        print(line)
+
+
+def psilo_gold_path(p):
+    return os.path.join(p['preds'], 'psilo_gold.json.gz')
+
+
+def load_psilo_gold(p):
+    with gzip.open(psilo_gold_path(p), 'rt', encoding='utf-8') as fh:
+        return json.load(fh)
+
+
+def cmd_psilo(args, p):
+    """Score checkers on PsiloQA's English answers (never used for training), by the size of the model
+    that wrote each answer (odh/psilo.py). Writes results/psilo.md."""
+    from odh import psilo
+    if os.path.exists(psilo_gold_path(p)) and not args.redo:
+        samples = None
+        gold = load_psilo_gold(p)
+    else:
+        samples = data.subset(psilo.load(), args.limit or 4000)
+        gold = [{k: s[k] for k in ('id', 'source_id', 'task', 'model', 'size_group', 'spans')} for s in samples]
+        with gzip.open(psilo_gold_path(p), 'wt', encoding='utf-8') as fh:
+            json.dump(gold, fh)
+    trained = [f[:-len('_training.json')] for f in sorted(os.listdir(p['results'])) if f.endswith('_training.json')]
+    names = args.names or [n for n in ['tiny17m', 'tiny68m', 'ld_base', 'ld_large'] + trained
+                           if os.path.exists(os.path.join(p['preds'], f'{n}_test.json.gz'))]
+    for name in names:
+        out = os.path.join(p['preds'], f'{name}_psilo.json.gz')
+        if os.path.exists(out) and not args.redo:
+            continue
+        if samples is None:
+            by_id = {s['id']: s for s in psilo.load()}
+            samples = [by_id[g['id']] for g in gold if g['id'] in by_id]
+        from odh.model import load, predict
+        model = model_of(p, name)
+        print(f'Scoring {name} ({model}) on {len(samples)} PsiloQA answers.')
+        tok, net = load(model, device())
+        save_preds(out, [s['id'] for s in samples], predict(net, tok, samples, args.max_length))
+    for g in gold:
+        g['spans'] = [tuple(x) for x in g['spans']]
+    groups = ['all'] + psilo.BUCKETS
+    lines = ['| Checker | ' + ' | '.join(f'{g} (n={sum(1 for x in gold if g == "all" or x["size_group"] == g)})'
+                                       for g in groups) + ' |', '|---|' + '---|' * len(groups)]
+    out = {'answers': len(gold), 'checkers': {}}
+    for name in names:
+        path = os.path.join(p['preds'], f'{name}_psilo.json.gz')
+        if not os.path.exists(path):
+            continue
+        tokens = load_preds(path, gold)
+        row, cells = {}, []
+        for g in groups:
+            idx = [i for i, x in enumerate(gold) if g == 'all' or x['size_group'] == g]
+            sub = [gold[i] for i in idx]
+            sp = all_spans([tokens[i] for i in idx])
+            row[g] = {'span_f1': score(sp, sub)['all'][2], 'ci95': bootstrap(sp, sub)}
+            cells.append(f'{row[g]["span_f1"]} {list(row[g]["ci95"])}')
+        out['checkers'][name] = row
+        lines.append(f'| {name} | ' + ' | '.join(cells) + ' |')
+    lines.append('\nSpan F1 (cut-off 0.5) on English PsiloQA answers, grouped by the size of the model that wrote '
+                 'the answer; spans marked by GPT-4o (PsiloQA). 95% intervals resample Wikipedia articles.')
+    md = '\n'.join(lines)
+    write_json(os.path.join(p['results'], 'psilo.json'), out)
+    with open(os.path.join(p['results'], 'psilo.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
+
+
+def cmd_compare(args, p):
+    """Pairs of runs side by side (A:B): B minus A with its 95% interval, on the RAGTruth test set
+    (at 0.5 and at each run's dev cut-off) and, when both were scored, on PsiloQA by answer-model
+    size. Writes results/compare.md."""
+    from odh import psilo
+    _, _, test = data.splits(data.load_ragtruth(args.data_dir))
+    gold = load_psilo_gold(p) if os.path.exists(psilo_gold_path(p)) else None
+    if gold:
+        for g in gold:
+            g['spans'] = [tuple(x) for x in g['spans']]
+
+    def cutoff(name):
+        path = os.path.join(p['results'], f'{name}_training.json')
+        return read_json(path).get('dev_cutoff', 0.5) if os.path.exists(path) else 0.5
+
+    def diff(sa, sb, samples):
+        fa, fb = score(sa, samples)['all'][2], score(sb, samples)['all'][2]
+        return f'{fa} → {fb} ({fb - fa:+.2f} {list(bootstrap(sb, samples, base=sa))})'
+
+    groups = ['all'] + psilo.BUCKETS
+    head = ['A → B', 'RAGTruth, cut-off 0.5', 'RAGTruth, dev cut-offs'] + [f'PsiloQA {g}' for g in groups]
+    lines = ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
+    for pair in args.pairs:
+        a, b = pair.split(':')
+        pa, pb = (os.path.join(p['preds'], f'{n}_test.json.gz') for n in (a, b))
+        if not (os.path.exists(pa) and os.path.exists(pb)):
+            print(f'Skipped {pair}: score both runs first.')
+            continue
+        with gzip.open(pa, 'rt', encoding='utf-8') as fh:
+            ids = set(json.load(fh)['ids'])
+        with gzip.open(pb, 'rt', encoding='utf-8') as fh:
+            ids &= set(json.load(fh)['ids'])
+        sub = [s for s in test if s['id'] in ids]
+        ta, tb = load_preds(pa, sub), load_preds(pb, sub)
+        cells = [f'{a} → {b}', diff(all_spans(ta), all_spans(tb), sub),
+                 diff(all_spans(ta, cutoff(a)), all_spans(tb, cutoff(b)), sub)]
+        qa, qb = (os.path.join(p['preds'], f'{n}_psilo.json.gz') for n in (a, b))
+        both = bool(gold) and os.path.exists(qa) and os.path.exists(qb)
+        if both:
+            pa_t, pb_t = load_preds(qa, gold), load_preds(qb, gold)
+        for g in groups:
+            if both:
+                idx = [i for i, x in enumerate(gold) if g == 'all' or x['size_group'] == g]
+                s2 = [gold[i] for i in idx]
+                cells.append(diff(all_spans([pa_t[i] for i in idx]), all_spans([pb_t[i] for i in idx]), s2))
+            else:
+                cells.append('')
+        lines.append('| ' + ' | '.join(cells) + ' |')
+    lines.append('\nEach cell: span F1 of A → span F1 of B (B minus A, 95% interval from resampling sources). '
+                 'PsiloQA columns: cut-off 0.5, grouped by the size of the model that wrote the answer.')
+    md = '\n'.join(lines)
+    with open(os.path.join(p['results'], 'compare.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
+
+
 def cmd_signals(args, p):
     """Re-read the answers of one open answering model and record its signals (odh/signals.py)."""
     import math
@@ -662,7 +872,8 @@ def cmd_table(args, p):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
-                                     'signals', 'fusion', 'teach', 'generate', 'distill'])
+                                     'signals', 'fusion', 'teach', 'generate', 'distill', 'llmlabel', 'psilo',
+                                     'compare'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -693,13 +904,27 @@ def main():
                     help='train with --teacher: weight of the human label (the teacher gets 1 - alpha)')
     ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
     ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
-    ap.add_argument('--names', nargs='+', help='distill: trained runs to show (default: all scored ones)')
+    ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones)')
+    ap.add_argument('--extra-teacher', help='train: who labels the new answers (default: --teacher), e.g. gpt4o')
+    ap.add_argument('--extra-hard', action='store_true', help='train: round the labels of the new answers to 0 or 1')
+    ap.add_argument('--extra-max', type=int, help='train: use at most this many new answers (same share per model)')
+    ap.add_argument('--four-bit', action='store_true', help='generate: load the answering model in 4-bit')
+    ap.add_argument('--llm-model', default='gpt-4o', help='llmlabel: the model name the API expects')
+    ap.add_argument('--api-base', default='https://api.openai.com/v1', help='llmlabel: OpenAI-compatible API address')
+    ap.add_argument('--api-key-env', default='OPENAI_API_KEY', help='llmlabel: environment variable with the key')
+    ap.add_argument('--workers', type=int, default=8, help='llmlabel: requests sent at the same time')
+    ap.add_argument('--on', choices=['extra', 'test'], default='extra',
+                    help='llmlabel: label the new answers (extra) or 300 RAGTruth test answers (test)')
+    ap.add_argument('--pairs', nargs='+', help='compare: pairs of runs A:B, e.g. kd17m:kdlarge17m')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
-    if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill') and not args.name:
+    if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare') \
+            and not args.name:
         ap.error('--name is required')
     if args.step in ('signals', 'generate') and not args.generator:
         ap.error(f'{args.step} needs --generator')
+    if args.step == 'compare' and not args.pairs:
+        ap.error('compare needs --pairs A:B ...')
     if args.extra and not args.teacher:
         ap.error('--extra needs --teacher (the new answers have no human labels)')
     if args.name and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.name):
@@ -712,7 +937,8 @@ def main():
         os.makedirs(p['onnx'], exist_ok=True)
     {'models': cmd_models, 'score': cmd_score, 'export': cmd_export, 'check8bit': cmd_check8bit,
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
-     'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill}[args.step](args, p)
+     'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill,
+     'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare}[args.step](args, p)
 
 
 if __name__ == '__main__':

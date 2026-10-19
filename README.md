@@ -63,6 +63,20 @@ cut-off chosen on the dev answers, each student against the human-labels-only st
 same size that saw about as many answers in training (so extra training alone cannot explain a
 gain) and against the published TinyLettuce of the same size, with 95% intervals.
 
+## Two tests of what is new
+
+`colab/novelty.ipynb` tests the two claims a reviewer will ask about.
+**A. Does it matter who writes the new answers?** Large models (Qwen2.5-7B, OLMo-2-7B, Mistral-7B
+v0.3, in 4-bit) write answers to the same training questions; the same teacher marks them, and a
+student is trained exactly like `kd17m` with the same number of new answers (`kdlarge17m`).
+**B. Our 396M teacher against a large language model as the labeller** (the PsiloQA way): GPT-4o, or any
+model behind an OpenAI-compatible API, marks the same small-model answers with `[HAL]` tags
+(`odh/llmlabel.py`); a student learns from them (`llm17m`), next to one trained on our teacher's labels
+rounded to yes/no (`kdhard17m`). The LLM is also scored against people on 300 RAGTruth test answers.
+All students are scored on RAGTruth and on English PsiloQA answers grouped by the size of the model
+that wrote them (`odh/psilo.py`; PsiloQA is CC-BY-4.0 and never used for training); `compare` gives the
+differences with 95% intervals.
+
 ## Commands
 
 ```
@@ -79,6 +93,11 @@ python run.py teach     --name ld_large            # teacher's word probabilitie
 python run.py generate  --generator qwen2.5-1.5b   # new answers from a small model (GPU)
 python run.py train     --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
 python run.py distill                              # table of the teacher-student test
+python run.py generate  --generator qwen2.5-7b     # answers from a large model (4-bit), for test A
+python run.py llmlabel  --name gpt4o --llm-model gpt-4o   # an LLM labels the new answers (OPENAI_API_KEY)
+python run.py llmlabel  --name gpt4o --on test     # the LLM against people on 300 test answers
+python run.py psilo                                # PsiloQA scores by answer-model size
+python run.py compare   --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
 ```
 
 All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the
@@ -96,6 +115,8 @@ All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: co
 | `odh/signals.py` | The answering model's confidence and attention for every answer token |
 | `odh/fusion.py` | Text checker + answering-model signals: cross-validated comparison |
 | `odh/distill.py` | Teacher-student training: new answers from small models, teacher targets for the student |
+| `odh/llmlabel.py` | A large language model as the labeller (PsiloQA-style `[HAL]` tags, any OpenAI-compatible API) |
+| `odh/psilo.py` | PsiloQA as a second test set, grouped by the size of the model that wrote each answer |
 | `run.py` | The commands above |
 
 Checks without a GPU or downloads: `python -m pytest tests -q` and, for an end-to-end run,
