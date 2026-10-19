@@ -14,7 +14,8 @@
     python run.py train  --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
     python run.py distill                         # table of the teacher-student test
     python run.py generate --generator qwen2.5-7b  # answers from a large model (4-bit), for comparison
-    python run.py llmlabel --name gpt4o --llm-model gpt-4o   # a large LLM labels the new answers (API)
+    python run.py llmlabel --name qwen7b --local qwen2.5-7b  # a free open LLM labels the new answers (GPU)
+    python run.py llmlabel --name gpt4o --llm-model gpt-4o   # or a paid API model (OPENAI_API_KEY)
     python run.py psilo                           # score checkers on PsiloQA, by answer-model size
     python run.py compare --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
 
@@ -548,14 +549,23 @@ def cmd_llmlabel(args, p):
     (--on test, to measure the labeller against people). Labels are saved like a teacher's:
     preds/<name>_extra_<answering model>.json.gz, or preds/<name>_test.json.gz."""
     from odh import distill, llmlabel
-    key = os.environ.get(args.api_key_env)
-    if not key:
-        raise SystemExit(f'No API key: put it in the environment variable {args.api_key_env} '
-                         '(on Colab: the Secrets panel, then the notebook copies it).')
+    style = args.style or ('quotes' if args.local else 'tags')
+    if args.local:                            # free: an open model on this machine's GPU
+        hf_id = distill.ANSWER_MODELS.get(args.local, args.local)
+        model_name = hf_id
+    else:                                     # paid: an OpenAI-compatible API
+        key = os.environ.get(args.api_key_env)
+        if not key:
+            raise SystemExit(f'No API key: put it in the environment variable {args.api_key_env} '
+                             '(on Colab: the Secrets panel), or use a free open model with --local qwen2.5-7b.')
+        model_name = args.llm_model
     full_train, _, test = data.splits(data.load_ragtruth(args.data_dir))
 
     def ask(sample):
-        return llmlabel.call(args.llm_model, llmlabel.messages(sample['prompt'], sample['answer']), args.api_base, key)
+        msgs = llmlabel.messages(sample['prompt'], sample['answer'], style)
+        return llmlabel.call(args.llm_model, msgs, args.api_base, key)
+
+    tok = net = None
 
     if args.on == 'test':
         jobs = [('test', data.subset(test, args.limit or 300))]
@@ -568,12 +578,21 @@ def cmd_llmlabel(args, p):
                 jobs.append((f'extra_{g}', data.subset(extra, args.limit)))
     for tag, samples in jobs:
         folder = os.path.join(p['llm'], args.name, tag)
-        print(f'{args.llm_model} labels {len(samples)} answers ({tag}).')
-        t_in, t_out = llmlabel.label_all(samples, folder, ask, workers=args.workers)
+        print(f'{model_name} labels {len(samples)} answers ({tag}, reply style: {style}).')
+        t_in = t_out = 0
+        if args.local:
+            have = llmlabel.load_replies(folder)
+            if any(s['id'] not in have for s in samples):
+                if net is None:
+                    four_bit = args.local in distill.LARGE or args.four_bit or re.search(r'\b([7-9]|\d\d)b', hf_id.lower())
+                    tok, net = distill.load_small_generator(hf_id, device(), four_bit=bool(four_bit))
+                llmlabel.local_replies(net, tok, samples, folder, style)
+        else:
+            t_in, t_out = llmlabel.label_all(samples, folder, ask, workers=args.workers)
         replies = llmlabel.load_replies(folder)
         ids, tokens, found, unusable = [], [], {}, 0
         for s in samples:
-            spans = llmlabel.parse(replies.get(s['id']), s['answer'])
+            spans = llmlabel.parse_reply(replies.get(s['id']), s['answer'], style)
             if spans is None:
                 unusable += 1
                 continue
@@ -581,12 +600,15 @@ def cmd_llmlabel(args, p):
             tokens.append(distill.spans_to_tokens(s['answer'], spans))
             found[s['id']] = spans
         save_preds(os.path.join(p['preds'], f'{args.name}_{tag}.json.gz'), ids, tokens)
-        info = {'labeller': args.name, 'llm_model': args.llm_model, 'api_base': args.api_base, 'set': tag,
+        info = {'labeller': args.name, 'llm_model': model_name, 'runs_on': 'local GPU' if args.local else args.api_base,
+                'reply_style': style, 'set': tag,
                 'answers': len(samples), 'labelled': len(ids), 'unusable_replies': unusable,
                 'answers_with_spans': sum(1 for v in found.values() if v),
                 'tokens_in_this_run': t_in, 'tokens_out_this_run': t_out}
-        if tag == 'test':                     # how good is the labeller, against people and our teacher?
-            kept = [s for s in samples if s['id'] in found]
+        if unusable > 0.2 * len(samples):
+            print(f'WARNING: {unusable} of {len(samples)} replies could not be read; look at a few in {folder}.')
+        kept = [s for s in samples if s['id'] in found]
+        if tag == 'test' and kept:            # how good is the labeller, against people and our teacher?
             spans = [found[s['id']] for s in kept]
             sc = score(spans, kept)
             info['labeller_vs_people'] = {'span_f1': sc['all'][2], 'precision': sc['all'][0], 'recall': sc['all'][1],
@@ -909,6 +931,9 @@ def main():
     ap.add_argument('--extra-hard', action='store_true', help='train: round the labels of the new answers to 0 or 1')
     ap.add_argument('--extra-max', type=int, help='train: use at most this many new answers (same share per model)')
     ap.add_argument('--four-bit', action='store_true', help='generate: load the answering model in 4-bit')
+    ap.add_argument('--local', help='llmlabel: a free open model on this GPU instead of an API, e.g. qwen2.5-7b')
+    ap.add_argument('--style', choices=['tags', 'quotes'], help='llmlabel: reply style (default: quotes '
+                    'with --local, tags with an API)')
     ap.add_argument('--llm-model', default='gpt-4o', help='llmlabel: the model name the API expects')
     ap.add_argument('--api-base', default='https://api.openai.com/v1', help='llmlabel: OpenAI-compatible API address')
     ap.add_argument('--api-key-env', default='OPENAI_API_KEY', help='llmlabel: environment variable with the key')

@@ -163,13 +163,14 @@ def chat_text(tok, prompt):
 
 
 def generate(model, tok, prompts, max_new_tokens=450, temperature=0.7, top_p=0.9,
-             batch_tokens=24000, max_rows=32, max_prompt_tokens=3500, seed=0):
-    """One sampled answer per prompt: [{'answer', 'finished', 'new_tokens'}] or None when the
-    prompt is too long. Prompts of similar length are batched together."""
+             batch_tokens=24000, max_rows=32, max_prompt_tokens=3500, seed=0, chat=True, sample=True):
+    """One answer per prompt: [{'answer', 'finished', 'new_tokens'}] or None when the prompt is too
+    long. Prompts of similar length are batched together. chat=False: the prompts are already in
+    the model's chat format. sample=False: greedy decoding (for labelling)."""
     import torch
     from odh.model import batches
     device = next(model.parameters()).device
-    texts = [chat_text(tok, p) for p in prompts]
+    texts = [chat_text(tok, p) for p in prompts] if chat else list(prompts)
     ids = [tok(t, add_special_tokens=False)['input_ids'] for t in texts]
     keep = [i for i, x in enumerate(ids) if len(x) <= max_prompt_tokens]
     lengths = {i: len(ids[i]) + max_new_tokens for i in keep}
@@ -187,9 +188,10 @@ def generate(model, tok, prompts, max_new_tokens=450, temperature=0.7, top_p=0.9
             input_ids[r, width - len(ids[i]):] = torch.tensor(ids[i])
             mask[r, width - len(ids[i]):] = 1
         with torch.no_grad():
+            how = (dict(do_sample=True, temperature=temperature, top_p=top_p, repetition_penalty=1.1) if sample
+                   else dict(do_sample=False, temperature=None, top_p=None, top_k=None))
             gen = model.generate(input_ids=input_ids.to(device), attention_mask=mask.to(device),
-                                 max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature,
-                                 top_p=top_p, repetition_penalty=1.1, pad_token_id=tok.pad_token_id)
+                                 max_new_tokens=max_new_tokens, pad_token_id=tok.pad_token_id, **how)
         new = gen[:, width:].cpu()
         for r, i in enumerate(b):
             row = new[r].tolist()

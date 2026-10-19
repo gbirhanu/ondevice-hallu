@@ -69,9 +69,10 @@ gain) and against the published TinyLettuce of the same size, with 95% intervals
 **A. Does it matter who writes the new answers?** Large models (Qwen2.5-7B, OLMo-2-7B, Mistral-7B
 v0.3, in 4-bit) write answers to the same training questions; the same teacher marks them, and a
 student is trained exactly like `kd17m` with the same number of new answers (`kdlarge17m`).
-**B. Our 396M teacher against a large language model as the labeller** (the PsiloQA way): GPT-4o, or any
-model behind an OpenAI-compatible API, marks the same small-model answers with `[HAL]` tags
-(`odh/llmlabel.py`); a student learns from them (`llm17m`), next to one trained on our teacher's labels
+**B. Our 396M teacher against a large language model as the labeller** (the PsiloQA way): by default a
+free open model, Qwen2.5-7B-Instruct in 4-bit on the Colab GPU, lists the unsupported parts of the same
+small-model answers (`odh/llmlabel.py`; a paid model behind an OpenAI-compatible API, such as GPT-4o,
+also works, with PsiloQA's `[HAL]` tags); a student learns from them (`llm17m`), next to one trained on our teacher's labels
 rounded to yes/no (`kdhard17m`). The LLM is also scored against people on 300 RAGTruth test answers.
 All students are scored on RAGTruth and on English PsiloQA answers grouped by the size of the model
 that wrote them (`odh/psilo.py`; PsiloQA is CC-BY-4.0 and never used for training); `compare` gives the
@@ -94,8 +95,8 @@ python run.py generate  --generator qwen2.5-1.5b   # new answers from a small mo
 python run.py train     --name kd17m --base jhu-clsp/ettin-encoder-17m --teacher ld_large --extra qwen2.5-1.5b
 python run.py distill                              # table of the teacher-student test
 python run.py generate  --generator qwen2.5-7b     # answers from a large model (4-bit), for test A
-python run.py llmlabel  --name gpt4o --llm-model gpt-4o   # an LLM labels the new answers (OPENAI_API_KEY)
-python run.py llmlabel  --name gpt4o --on test     # the LLM against people on 300 test answers
+python run.py llmlabel  --name qwen7b --local qwen2.5-7b   # a free open LLM labels the new answers (GPU)
+python run.py llmlabel  --name qwen7b --local qwen2.5-7b --on test   # the LLM against people, 300 test answers
 python run.py psilo                                # PsiloQA scores by answer-model size
 python run.py compare   --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
 ```

@@ -81,6 +81,38 @@ class LabellerReplies(unittest.TestCase):
         self.assertIn(ANSWER, seen['body']['messages'][1]['content'])
 
 
+class FreeLocalLabeller(unittest.TestCase):
+    def test_quote_lists_become_spans(self):
+        spans = llmlabel.parse_quotes('Sure: ["5 million", "Addis Ababa"]', ANSWER)
+        self.assertEqual([ANSWER[s:e] for s, e in spans], ['Addis Ababa', '5 million'])
+        self.assertEqual(llmlabel.parse_quotes('[]', ANSWER), [])
+        self.assertEqual(llmlabel.parse_quotes('["not in the answer"]', ANSWER), [])
+        self.assertIsNone(llmlabel.parse_quotes('I cannot tell.', ANSWER))
+        twice = 'one two one'
+        self.assertEqual(llmlabel.parse_quotes('["one", "one"]', twice), [(0, 3), (8, 11)])
+
+    def test_open_model_on_this_machine_labels_and_resumes(self):
+        sys.path.insert(0, str(ROOT / 'tests'))
+        from test_signals import tiny_generator
+        tok, net = tiny_generator()
+        tok.padding_side = 'left'
+        tok.pad_token = tok.eos_token
+        tok.chat_template = ("{% for m in messages %}{{ m['role'] }}: {{ m['content'] }}\n{% endfor %}"
+                             "{% if add_generation_prompt %}assistant:{% endif %}")
+        tmp = ROOT / 'work_test' / ('q-' + uuid.uuid4().hex)
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        samples = [{'id': str(i), 'prompt': 'w1 w2 w3', 'answer': 'w4 w5'} for i in range(3)]
+        llmlabel.local_replies(net, tok, samples, str(tmp), 'quotes', chunk=2, max_new_tokens=4, log=lambda *_: None)
+        replies = llmlabel.load_replies(str(tmp))
+        self.assertEqual(sorted(replies), ['0', '1', '2'])
+        stamp = sorted(tmp.glob('*.json.gz'))[0].stat().st_mtime_ns
+        llmlabel.local_replies(net, tok, samples, str(tmp), 'quotes', chunk=2, max_new_tokens=4, log=lambda *_: None)
+        self.assertEqual(sorted(tmp.glob('*.json.gz'))[0].stat().st_mtime_ns, stamp)
+        a = distill.generate(net, tok, ['w1 w2'], max_new_tokens=5, sample=False)
+        b = distill.generate(net, tok, ['w1 w2'], max_new_tokens=5, sample=False)
+        self.assertEqual(a, b)                                            # greedy: the same every time
+
+
 class Labels(unittest.TestCase):
     def test_spans_become_teacher_tokens(self):
         start = ANSWER.index('5 million')
