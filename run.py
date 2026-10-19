@@ -638,6 +638,13 @@ def load_psilo_gold(p):
         return json.load(fh)
 
 
+def psilo_groups(gold):
+    """'all' and every answer-model size group that has answers (some sizes may be absent in English)."""
+    from odh import psilo
+    present = {x['size_group'] for x in gold}
+    return ['all'] + [b for b in psilo.BUCKETS + ['unknown size'] if b in present]
+
+
 def cmd_psilo(args, p):
     """Score checkers on PsiloQA's English answers (never used for training), by the size of the model
     that wrote each answer (odh/psilo.py). Writes results/psilo.md."""
@@ -667,7 +674,7 @@ def cmd_psilo(args, p):
         save_preds(out, [s['id'] for s in samples], predict(net, tok, samples, args.max_length))
     for g in gold:
         g['spans'] = [tuple(x) for x in g['spans']]
-    groups = ['all'] + psilo.BUCKETS
+    groups = psilo_groups(gold)
     lines = ['| Checker | ' + ' | '.join(f'{g} (n={sum(1 for x in gold if g == "all" or x["size_group"] == g)})'
                                        for g in groups) + ' |', '|---|' + '---|' * len(groups)]
     out = {'answers': len(gold), 'checkers': {}}
@@ -698,7 +705,6 @@ def cmd_compare(args, p):
     """Pairs of runs side by side (A:B): B minus A with its 95% interval, on the RAGTruth test set
     (at 0.5 and at each run's dev cut-off) and, when both were scored, on PsiloQA by answer-model
     size. Writes results/compare.md."""
-    from odh import psilo
     _, _, test = data.splits(data.load_ragtruth(args.data_dir))
     gold = load_psilo_gold(p) if os.path.exists(psilo_gold_path(p)) else None
     if gold:
@@ -713,7 +719,7 @@ def cmd_compare(args, p):
         fa, fb = score(sa, samples)['all'][2], score(sb, samples)['all'][2]
         return f'{fa} → {fb} ({fb - fa:+.2f} {list(bootstrap(sb, samples, base=sa))})'
 
-    groups = ['all'] + psilo.BUCKETS
+    groups = psilo_groups(gold) if gold else ['all']
     head = ['A → B', 'RAGTruth, cut-off 0.5', 'RAGTruth, dev cut-offs'] + [f'PsiloQA {g}' for g in groups]
     lines = ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
     for pair in args.pairs:

@@ -47,6 +47,8 @@ def score(preds, samples):
 
 def bootstrap(preds, samples, base=None, n=1000, seed=0):
     """95% interval of span F1 (points), resampling sources. With base: of F1(preds) - F1(base)."""
+    if not samples:
+        return float('nan'), float('nan')
     sources = sorted({s['source_id'] for s in samples})
     index = {src: i for i, src in enumerate(sources)}
     idx = np.array([index[s['source_id']] for s in samples])
