@@ -4,7 +4,8 @@ Can a checker small enough for a phone mark the words of an AI answer that the u
 notes do not support? This repository scores small span detectors on RAGTruth, shrinks them
 to 8-bit, and times them on a CPU. It is separate from the earlier `tse` / `hallu_poc` work.
 
-Concept note: "Checking AI answers on the phone: a lightweight hallucination detector for offline RAG".
+Concept note: "Distilling Span-Level Hallucination Detectors into Compact Encoders for Offline, On-Device
+Retrieval-Augmented Generation". **The working plan, with numbered steps, is in [PLAN.md](PLAN.md).**
 
 ## What it measures
 
