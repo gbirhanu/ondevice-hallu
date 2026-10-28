@@ -18,6 +18,8 @@
     python run.py llmlabel --name gpt4o --llm-model gpt-4o   # or a paid API model (OPENAI_API_KEY)
     python run.py psilo                           # score checkers on PsiloQA, by answer-model size
     python run.py compare --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
+    python run.py train  --name kd17m-s2 --seed 2 ...   # kd17m again with seed 2 (same recipe, checked)
+    python run.py summary                         # mean and spread over seeds; differences that count
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -304,6 +306,37 @@ def with_teacher(samples, labels, what):
     return [{**s, 'teacher': labels[s['id']]} for s in samples]
 
 
+SEED_SUFFIX = re.compile(r'-s(\d+)$')
+RECIPE = ['base', 'epochs', 'lr', 'teacher', 'alpha', 'extra_teacher', 'extra_hard', 'extra', 'train_answers',
+          'extra_answers', 'dev_answers', 'max_length', 'batch_tokens']
+
+
+def base_and_seed(name):
+    """'kd17m-s2' -> ('kd17m', 2): another training run of kd17m with seed 2. 'kd17m' -> ('kd17m', None)."""
+    m = SEED_SUFFIX.search(name)
+    return (name[:m.start()], int(m.group(1))) if m else (name, None)
+
+
+def same_recipe_as_base(p, recipe):
+    """A run named <run>-s<k> is the seed-k repeat of <run>: it must use seed k and everything else exactly
+    as <run> did (rule R2). Checked before training, so no GPU time is lost on a wrong command."""
+    base, k = base_and_seed(recipe['name'])
+    if k is None:
+        return
+    if recipe['seed'] != k:
+        raise SystemExit(f'{recipe["name"]} is the seed-{k} run of {base}: add --seed {k}.')
+    path = os.path.join(p['results'], f'{base}_training.json')
+    if not os.path.exists(path):
+        raise SystemExit(f'{recipe["name"]} repeats {base} with another seed, but {base} has not been trained.')
+    old = read_json(path)
+    if old.get('seed', 42) == k:
+        raise SystemExit(f'{base} itself was trained with seed {k}; choose another seed.')
+    changed = [f'{key}: {old[key]} -> {recipe[key]}' for key in RECIPE
+               if key in old and key in recipe and old[key] != recipe[key]]
+    if changed:
+        raise SystemExit(f'{recipe["name"]} would not repeat the recipe of {base}: ' + '; '.join(changed))
+
+
 def cmd_train(args, p):
     out = os.path.join(p['results'], f'{args.name}_training.json')
     if done(out, args):
@@ -338,15 +371,17 @@ def cmd_train(args, p):
             train_set += with_teacher(extra, labels, f'answers of {g}')
             extra_counts[g] = len(extra)
     folder = os.path.join(p['models'], args.name)
+    recipe = {'name': args.name, 'base': args.base, 'epochs': args.epochs, 'lr': args.lr,
+              'seed': args.seed, 'teacher': args.teacher, 'alpha': args.alpha if args.teacher else 1.0,
+              'extra_teacher': (args.extra_teacher or args.teacher) if extra_counts else None,
+              'extra_hard': bool(args.extra_hard and extra_counts), 'extra': extra_counts, 'train_answers': human,
+              'extra_answers': sum(extra_counts.values()), 'dev_answers': len(dev),
+              'max_length': args.max_length, 'batch_tokens': args.batch_tokens}
+    same_recipe_as_base(p, recipe)
     t0 = time.time()
     res = train(args.base, train_set, dev, folder, epochs=args.epochs, lr=args.lr, max_length=args.max_length,
-                batch_tokens=args.batch_tokens, seed=args.seed, alpha=args.alpha if args.teacher else 1.0,
-                device=device())
-    write_json(out, {'name': args.name, 'base': args.base, 'epochs': args.epochs, 'lr': args.lr,
-                     'seed': args.seed, 'teacher': args.teacher, 'alpha': args.alpha if args.teacher else 1.0,
-                     'extra_teacher': (args.extra_teacher or args.teacher) if extra_counts else None,
-                     'extra_hard': bool(args.extra_hard and extra_counts), 'extra': extra_counts, 'train_answers': human, 'extra_answers': sum(extra_counts.values()),
-                     'dev_answers': len(dev), 'seconds': round(time.time() - t0), **res})
+                batch_tokens=args.batch_tokens, seed=args.seed, alpha=recipe['alpha'], device=device())
+    write_json(out, {**recipe, 'seconds': round(time.time() - t0), **res})
     print(f'Saved the best epoch ({res["best_epoch"]}) to {folder}: dev span F1 {res["dev_f1_05"]} at 0.5, '
           f'{res["dev_f1_at_cutoff"]} at the dev cut-off {res["dev_cutoff"]}. '
           f'Next: python run.py score --name {args.name}')
@@ -783,6 +818,180 @@ def cmd_compare(args, p):
     print(md)
 
 
+# The comparisons the success criteria of PLAN.md need (each shown only when both sides are scored).
+KEY_PAIRS = ['hard17m-8ep:kd17m', 'hard68m-8ep:kd68m',          # S1: what the teacher and new answers add
+             'tiny17m:kd17m', 'tiny68m:kd68m',                  # S2: against the published model of the same size
+             'ld_large:kd68m',                                  # S3: against the teacher
+             'kd17m-n4509:kdlarge17m', 'kd68m-n4509:kdlarge68m']  # S4: who writes the new answers (test A)
+
+
+def summarize(p, test, gold=None, names=None, pairs=None):
+    """Runs grouped with their seed repeats (<run>-s<k>): mean and spread over the training runs on
+    RAGTruth (cut-off 0.5 and each run's dev cut-off; answer-level F1) and PsiloQA (by answer-model size),
+    and differences between groups, run by run (matched by seed), with a 95% interval of the mean
+    difference that resamples test sources, the same resamples for every run (odh.metrics.bootstrap_mean).
+    Returns (markdown, record)."""
+    import numpy as np
+    from odh.metrics import answer_f1, bootstrap_mean
+    ladder = [n for n, _, _ in LADDER]
+    scored = [f[:-len('_score.json')] for f in sorted(os.listdir(p['results'])) if f.endswith('_score.json')]
+    groups = {}
+    for n in scored:
+        if not os.path.exists(os.path.join(p['preds'], f'{n}_test.json.gz')):
+            continue
+        if read_json(os.path.join(p['results'], f'{n}_score.json')).get('answers') != len(test):
+            print(f'Left out {n}: it was scored on part of the test set (--limit).')
+            continue
+        groups.setdefault(base_and_seed(n)[0], []).append(n)
+    records = {n: read_json(os.path.join(p['results'], f'{n}_training.json'))
+               for g in groups.values() for n in g if os.path.exists(os.path.join(p['results'], f'{n}_training.json'))}
+
+    def seed_of(n):
+        return records[n].get('seed', 42) if n in records else None
+
+    for g in groups.values():                       # seed 42 first, then 2, 3, ...
+        g.sort(key=lambda n: (seed_of(n) != 42, seed_of(n) or 0, n))
+    params = {b: read_json(os.path.join(p['results'], f'{g[0]}_score.json')).get('params', 0) for b, g in groups.items()}
+    order = sorted(groups, key=lambda b: (0, ladder.index(b), 0, '') if b in ladder else (1, 0, params[b], b))
+    if names:
+        order = [b for b in names if b in groups]
+    pair_list = []
+    for pair in pairs or KEY_PAIRS:
+        a, b = pair.split(':')
+        if a in groups and b in groups:
+            pair_list.append((a, b))
+        elif pairs:
+            print(f'Skipped {pair}: score both runs first.')
+    teacher = 'ld_large' if 'ld_large' in groups else None         # for the share of the teacher's F1
+    needed = sorted({n for b in set(order) | {x for ab in pair_list for x in ab} | ({teacher} if teacher else set())
+                     for n in groups[b]})
+
+    psilo_sets = []
+    if gold:
+        for g in psilo_groups(gold):
+            if g != 'unknown size':
+                idx = [i for i, x in enumerate(gold) if g == 'all' or x['size_group'] == g]
+                psilo_sets.append((f'PsiloQA {g}', idx))
+    measures = ['RAGTruth, 0.5', 'RAGTruth, dev cut-off'] + [m for m, _ in psilo_sets]
+    spans = {}                                      # run -> measure -> spans on that measure's answers
+    for n in needed:
+        tokens = load_preds(os.path.join(p['preds'], f'{n}_test.json.gz'), test)
+        cut = records[n].get('dev_cutoff', 0.5) if n in records else 0.5
+        spans[n] = {'RAGTruth, 0.5': all_spans(tokens), 'RAGTruth, dev cut-off': all_spans(tokens, cut)}
+        qp = os.path.join(p['preds'], f'{n}_psilo.json.gz')
+        if psilo_sets and os.path.exists(qp):
+            try:
+                sp = all_spans(load_preds(qp, gold))
+            except KeyError:
+                print(f'Left out the PsiloQA scores of {n}: they do not cover every PsiloQA answer.')
+                continue
+            for m, idx in psilo_sets:
+                spans[n][m] = [sp[i] for i in idx]
+    answers = {m: test for m in measures[:2]}
+    answers.update({m: [gold[i] for i in idx] for m, idx in psilo_sets})
+    f1 = {n: {m: score(v, answers[m])['all'][2] for m, v in s.items()} for n, s in spans.items()}
+
+    def mean_sd(values):
+        return (round(float(np.mean(values)), 2),
+                round(float(np.std(values, ddof=1)), 2) if len(values) > 1 else None)
+
+    def cell(mean, sd):
+        return '' if mean is None else (f'{mean:.2f}' if sd is None else f'{mean:.2f} ± {sd:.2f}')
+
+    def stats(b):
+        runs = groups[b]
+        g = {'runs': runs, 'seeds': [seed_of(n) for n in runs], 'measures': {}}
+        for m in measures:
+            if all(m in spans[n] for n in runs):
+                mean, sd = mean_sd([f1[n][m] for n in runs])
+                g['measures'][m] = {'mean': mean, 'sd': sd, 'per_run': [f1[n][m] for n in runs],
+                                    'ci95': bootstrap_mean([spans[n][m] for n in runs], answers[m])}
+        g['answer_f1'] = dict(zip(('mean', 'sd'), mean_sd([answer_f1(spans[n]['RAGTruth, 0.5'], test) for n in runs])))
+        return g
+
+    taught = stats(teacher) if teacher else None
+    rec = {'groups': {}, 'pairs': [], 'measures': measures}
+    head = ['Checker', 'Runs', *measures, 'RAGTruth answer F1', 'Share of the teacher (RAGTruth / PsiloQA)']
+    lines = ['## Every checker, averaged over its training runs', '',
+             '| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
+    for b in order:
+        g = taught if b == teacher else stats(b)
+        share = {}
+        if taught and b != teacher:
+            for m in ('RAGTruth, 0.5', 'PsiloQA all'):
+                if m in g['measures'] and m in taught['measures'] and taught['measures'][m]['mean']:
+                    share[m] = round(100 * g['measures'][m]['mean'] / taught['measures'][m]['mean'], 1)
+            g['share_of_teacher_pct'] = share
+        rec['groups'][b] = g
+        seeds = [s for s in g['seeds'] if s is not None]
+        who = f'{len(g["runs"])} (seeds {", ".join(map(str, seeds))})' if seeds else 'published'
+        lines.append('| ' + ' | '.join([b, who] + [cell(g['measures'][m]['mean'], g['measures'][m]['sd'])
+                                                  if m in g['measures'] else '' for m in measures]
+                                       + [cell(g['answer_f1']['mean'], g['answer_f1']['sd']),
+                                          'the teacher' if b == teacher else
+                                          ' / '.join(f'{share[m]}%' for m in ('RAGTruth, 0.5', 'PsiloQA all')
+                                                     if m in share)]) + ' |')
+
+    lines += ['', '## Differences between checkers (B minus A), training run by training run', '',
+              '| A → B | Measure | A | B | B − A [95%] | Run by run | Counts? |', '|---|---|---|---|---|---|---|']
+    for a, b in pair_list:
+        ga, gb = groups[a], groups[b]
+        if not (set(ga) & set(records)):            # a published checker: one fixed run
+            matched = [(ga[0], n) for n in gb]
+        elif not (set(gb) & set(records)):
+            matched = [(n, gb[0]) for n in ga]
+        else:
+            sb = {seed_of(n): n for n in gb}
+            matched = [(n, sb[seed_of(n)]) for n in ga if seed_of(n) in sb]
+        pr = {'a': a, 'b': b, 'matched': matched, 'measures': {}}
+        for m in measures:
+            mm = [(x, y) for x, y in matched if m in spans[x] and m in spans[y]]
+            if not mm:
+                continue
+            per = [round(f1[y][m] - f1[x][m], 2) for x, y in mm]
+            ma = round(float(np.mean([f1[x][m] for x, _ in mm])), 2)
+            mb = round(float(np.mean([f1[y][m] for _, y in mm])), 2)
+            ci = bootstrap_mean([spans[y][m] for _, y in mm], answers[m], bases=[spans[x][m] for x, _ in mm])
+            if len(mm) < 3:
+                verdict = 'needs 3 runs'
+            elif all(d > 0 for d in per) and ci[0] > 0:
+                verdict = 'yes, B better'
+            elif all(d < 0 for d in per) and ci[1] < 0:
+                verdict = 'yes, A better'
+            else:
+                verdict = 'no'
+            pr['measures'][m] = {'a_mean': ma, 'b_mean': mb, 'diff': round(mb - ma, 2), 'ci95': ci,
+                                 'per_run': per, 'counts': verdict}
+            lines.append(f'| {a} → {b} | {m} | {ma:.2f} | {mb:.2f} | {mb - ma:+.2f} [{ci[0]:+.2f}, {ci[1]:+.2f}] | '
+                         + ', '.join(f'{d:+.2f}' for d in per) + f' | {verdict} |')
+        rec['pairs'].append(pr)
+    lines += ['', 'Span F1 in points. Mean ± standard deviation over training runs (seeds 42, 2, 3; a run named '
+              '`<run>-s2` is `<run>` trained again with seed 2). RAGTruth: 2,700 test answers, people\'s marks; '
+              '"dev cut-off" uses the cut-off each run chose on the dev answers. PsiloQA: English answers, '
+              'GPT-4o marks, cut-off 0.5, grouped by the size of the model that wrote the answer. Answer F1: an '
+              'answer counts as flagged when at least one span is marked. 95% intervals: 1,000 resamples of test '
+              'sources (RAGTruth) or Wikipedia articles (PsiloQA), the same resamples for every run; runs are '
+              'matched by seed. "Counts?" applies rule R3: yes only with 3 or more matched runs that all point '
+              'the same way and an interval that excludes 0.']
+    return '\n'.join(lines), rec
+
+
+def cmd_summary(args, p):
+    """Mean and spread over seeds, and differences that count (rule R3). Writes results/summary.md
+    and results/summary.json (or the names given with --out)."""
+    _, _, test = data.splits(data.load_ragtruth(args.data_dir))
+    gold = load_psilo_gold(p) if os.path.exists(psilo_gold_path(p)) else None
+    if gold:
+        for g in gold:
+            g['spans'] = [tuple(x) for x in g['spans']]
+    md, rec = summarize(p, test, gold, args.names, args.pairs)
+    name = args.out or 'summary.md'
+    write_json(os.path.join(p['results'], name[:-3] + '.json'), rec)
+    with open(os.path.join(p['results'], name), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
+
+
 def cmd_signals(args, p):
     """Re-read the answers of one open answering model and record its signals (odh/signals.py)."""
     import math
@@ -928,7 +1137,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
                                      'signals', 'fusion', 'teach', 'generate', 'distill', 'llmlabel', 'psilo',
-                                     'compare'])
+                                     'compare', 'summary'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -960,7 +1169,7 @@ def main():
     ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
     ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
     ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones); '
-                    'llmlabel --on test: checkers scored on the same answers')
+                    'llmlabel --on test: checkers scored on the same answers; summary: runs to show, without -s2/-s3')
     ap.add_argument('--extra-teacher', help='train: who labels the new answers (default: --teacher), e.g. gpt4o')
     ap.add_argument('--extra-hard', action='store_true', help='train: round the labels of the new answers to 0 or 1')
     ap.add_argument('--extra-max', type=int, help='train: use at most this many new answers (same share per model)')
@@ -974,11 +1183,13 @@ def main():
     ap.add_argument('--workers', type=int, default=8, help='llmlabel: requests sent at the same time')
     ap.add_argument('--on', choices=['extra', 'test'], default='extra',
                     help='llmlabel: label the new answers (extra) or 300 RAGTruth test answers (test)')
-    ap.add_argument('--pairs', nargs='+', help='compare: pairs of runs A:B, e.g. kd17m:kdlarge17m')
-    ap.add_argument('--out', help='compare: file name in results/ (default compare.md), e.g. compare_step5.md')
+    ap.add_argument('--pairs', nargs='+', help='compare, summary: pairs of runs A:B, e.g. kd17m:kdlarge17m '
+                    '(summary: default the pairs the success criteria need)')
+    ap.add_argument('--out', help='compare, summary: file name in results/ (default compare.md / summary.md)')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
-    if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare') \
+    if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare',
+                         'summary') \
             and not args.name:
         ap.error('--name is required')
     if args.step in ('signals', 'generate') and not args.generator:
@@ -1000,7 +1211,7 @@ def main():
     {'models': cmd_models, 'score': cmd_score, 'export': cmd_export, 'check8bit': cmd_check8bit,
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
      'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill,
-     'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare}[args.step](args, p)
+     'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare, 'summary': cmd_summary}[args.step](args, p)
 
 
 if __name__ == '__main__':

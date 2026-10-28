@@ -1,7 +1,7 @@
 # Experiment plan: a compact word-level hallucination checker for offline RAG
 
 **Period:** 20 October – 19 November 2026 (one month) · **People:** Gemechu Birhanu, one colleague, Claude (assistant)
-**Last updated:** 20 October 2026
+**Last updated:** 28 October 2026
 
 ## How to use this plan
 
@@ -332,6 +332,8 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 |---|---|---|---|
 | 16–17 Oct | — | Published detectors scored, 8-bit fixed (w8 recipe), first idea (generator signals) dropped | `results/table.md`, `fusion*.md` |
 | 18 Oct | — | Distillation works at 17M and 68M (1 run each) | `results/distill.md` |
-| 19 Oct | — | Tests A and B at 17M; PsiloQA scores; 68M checks | `results/compare.md`, `psilo.md`, `compare_checks.md` |
+| 19 Oct | — | Tests A and B at 17M; PsiloQA scores; 68M checks | `results/compare_novelty.md` (tests A, B), `compare.md` (68M checks), `psilo.md` |
 | 20 Oct | — | Literature review (FastTrack); gap reworded; this plan written | `PLAN.md` |
 | | 1 | | |
+| 28 Oct | 2 | `EVALUATION.md` drafted by Claude; Gemechu and the colleague agree, then push it before steps 6 and 7 | `EVALUATION.md` |
+| 28 Oct | 4 | Seed runs (`<run>-s2`, `-s3`, recipe checked by `train`), `summary` command, `plan.ipynb` with steps 5, 6, 7, 12 and the averaged tables; 39 tests pass | `run.py`, `colab/plan.ipynb` |

@@ -5,7 +5,8 @@ notes do not support? This repository scores small span detectors on RAGTruth, s
 to 8-bit, and times them on a CPU. It is separate from the earlier `tse` / `hallu_poc` work.
 
 Concept note: "Distilling Span-Level Hallucination Detectors into Compact Encoders for Offline, On-Device
-Retrieval-Augmented Generation". **The working plan, with numbered steps, is in [PLAN.md](PLAN.md).**
+Retrieval-Augmented Generation". **The working plan, with numbered steps, is in [PLAN.md](PLAN.md)**; how every
+result is measured, and when a difference counts, is fixed in [EVALUATION.md](EVALUATION.md).
 
 ## What it measures
 
@@ -82,8 +83,10 @@ differences with 95% intervals.
 ## The plan notebook
 
 `colab/plan.ipynb` has one cell for each step of [PLAN.md](PLAN.md) that needs the GPU, numbered like the plan
-(now: step 5, test A at 68M; step 12, phone-sized chat models as the checker). Run the two setup cells, then only
-the cell of the step you are doing.
+(now: step 5, test A at 68M; steps 6 and 7, two more training runs of the main students and of test A; the
+averaged tables; step 12, phone-sized chat models as the checker). Run the two setup cells, then only the cell of
+the step you are doing. A run named `kd17m-s2` is `kd17m` trained again with seed 2; `train` refuses such a run if
+its recipe differs from the first run's, and `summary` averages the runs and says which differences count.
 
 ## Commands
 
@@ -108,6 +111,8 @@ python run.py psilo                                # PsiloQA scores by answer-mo
 python run.py compare   --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
 python run.py compare   --pairs kd68m-n4509:kdlarge68m --out compare_step5.md   # the same, in another file
 python run.py llmlabel  --name selfcheck15 --local qwen2.5-1.5b --on test   # a phone-sized chat model as the checker
+python run.py train     --name kd17m-s2 --seed 2 --base jhu-clsp/ettin-encoder-17m ...   # kd17m again, seed 2
+python run.py summary                              # mean ± spread over seeds; which differences count
 ```
 
 All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the
@@ -118,7 +123,7 @@ All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: co
 | File | What it does |
 | --- | --- |
 | `odh/data.py` | Loads RAGTruth; dev split by source; fixed subsets for CPU checks |
-| `odh/metrics.py` | Span F1 (LettuceDetect-compatible) and bootstrap intervals |
+| `odh/metrics.py` | Span F1 (LettuceDetect-compatible), answer-level F1, bootstrap intervals (also for averages over training runs) |
 | `odh/spans.py` | Token probabilities to character spans (0.5 cut-off) |
 | `odh/model.py` | Load, predict, train token classifiers (ModernBERT, Ettin, TinyLettuce, LettuceDetect) |
 | `odh/cpu.py` | ONNX export, 8-bit quantization, CPU prediction and timing |
