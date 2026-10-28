@@ -63,3 +63,43 @@ def bootstrap(preds, samples, base=None, n=1000, seed=0):
         f = f - prf(weights @ per_base)[2]
     lo, hi = np.percentile(100 * f, [2.5, 97.5])
     return round(float(lo), 2), round(float(hi), 2)
+
+
+def _per_source(preds, samples, idx, n_sources):
+    c = np.zeros((n_sources, 3))
+    np.add.at(c, idx, _counts(preds, samples))
+    return c
+
+
+def bootstrap_mean(runs, samples, bases=None, n=1000, seed=0):
+    """95% interval of the mean span F1 of several runs on the same answers (e.g. one training run per
+    seed), or, with bases (one per run, matched), of the mean of F1(run) - F1(base). Every run is scored
+    on the same resampled sources, so the interval shows how much the choice of test answers moves the
+    average; the runs themselves are kept as they are. With one run it equals bootstrap()."""
+    if not samples or not runs:
+        return float('nan'), float('nan')
+    if bases is not None and len(bases) != len(runs):
+        raise ValueError(f'{len(runs)} runs but {len(bases)} base runs')
+    sources = sorted({s['source_id'] for s in samples})
+    index = {src: i for i, src in enumerate(sources)}
+    idx = np.array([index[s['source_id']] for s in samples])
+    weights = np.random.default_rng(seed).multinomial(
+        len(sources), np.ones(len(sources)) / len(sources), size=n)
+    f = np.mean([prf(weights @ _per_source(r, samples, idx, len(sources)))[2] for r in runs], axis=0)
+    if bases is not None:
+        f = f - np.mean([prf(weights @ _per_source(b, samples, idx, len(sources)))[2] for b in bases], axis=0)
+    lo, hi = np.percentile(100 * f, [2.5, 97.5])
+    return round(float(lo), 2), round(float(hi), 2)
+
+
+def answer_f1(preds, samples):
+    """Answer-level F1 in percent, like LettuceDetect's example-level score: an answer counts as flagged
+    when at least one span is marked in it, and F1 is that of the flagged answers."""
+    if len(preds) != len(samples):
+        raise ValueError(f'{len(preds)} predictions for {len(samples)} answers')
+    pred = np.array([bool(p) for p in preds])
+    gold = np.array([bool(s['spans']) for s in samples])
+    tp, fp, fn = int((pred & gold).sum()), int((pred & ~gold).sum()), int((~pred & gold).sum())
+    p = tp / (tp + fp) if tp + fp else 0.0
+    r = tp / (tp + fn) if tp + fn else 0.0
+    return round(100 * (2 * p * r / (p + r) if p + r else 0.0), 2)
