@@ -79,6 +79,12 @@ All students are scored on RAGTruth and on English PsiloQA answers grouped by th
 that wrote them (`odh/psilo.py`; PsiloQA is CC-BY-4.0 and never used for training); `compare` gives the
 differences with 95% intervals.
 
+## The plan notebook
+
+`colab/plan.ipynb` has one cell for each step of [PLAN.md](PLAN.md) that needs the GPU, numbered like the plan
+(now: step 5, test A at 68M; step 12, phone-sized chat models as the checker). Run the two setup cells, then only
+the cell of the step you are doing.
+
 ## Commands
 
 ```
@@ -100,6 +106,8 @@ python run.py llmlabel  --name qwen7b --local qwen2.5-7b   # a free open LLM lab
 python run.py llmlabel  --name qwen7b --local qwen2.5-7b --on test   # the LLM against people, 300 test answers
 python run.py psilo                                # PsiloQA scores by answer-model size
 python run.py compare   --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
+python run.py compare   --pairs kd68m-n4509:kdlarge68m --out compare_step5.md   # the same, in another file
+python run.py llmlabel  --name selfcheck15 --local qwen2.5-1.5b --on test   # a phone-sized chat model as the checker
 ```
 
 All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the

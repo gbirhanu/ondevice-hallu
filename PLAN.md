@@ -172,10 +172,11 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 
 ### Step 5 — Test A at 68M (runs now)
 - [ ] **Who:** Gemechu on Colab. **Needs:** nothing (the cell is ready). **Time:** about 2.5 GPU hours.
-- **Do:** in `novelty.ipynb`, run the setup cells and the Part B3 cell, then the "test A at 68M" cell (it trains
-  `kd68m-n4509` and `kdlarge68m`, scores them on PsiloQA and writes `results/compare.md`). Once step 4 is done, the same
-  cell is in `plan.ipynb`.
-- **Output:** `kd68m-n4509`, `kdlarge68m` and their scores on Drive. **Done when:** `compare.md` has the 68M row.
+- **Do:** open `colab/plan.ipynb`
+  ([Colab](https://colab.research.google.com/github/gbirhanu/ondevice-hallu/blob/main/colab/plan.ipynb)), run the two
+  setup cells, then the step 5 cell. It trains `kd68m-n4509` and `kdlarge68m`, scores them on RAGTruth and PsiloQA and
+  writes `results/compare_step5.md` (17M and 68M rows side by side).
+- **Output:** `kd68m-n4509`, `kdlarge68m` and their scores on Drive. **Done when:** `compare_step5.md` has the 68M row.
 
 ### Step 6 — Two more seeds of the main runs
 - [ ] **Who:** Gemechu. **Needs:** steps 2 and 4. **Time:** about 6 GPU hours (68M runs take about 75 minutes each).
@@ -222,9 +223,11 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 
 ### Step 12 — Baseline: the phone's own model checks itself
 - [ ] **Who:** Gemechu runs (code exists: `llmlabel --local`). **Needs:** nothing (runs now). **Time:** about 1 GPU hour.
-- **Do:** ask Qwen2.5-1.5B-Instruct and Qwen2.5-0.5B-Instruct to list the unsupported words in answers: first on 300
-  RAGTruth test answers, later on the pilot set (step 20).
-- **Output:** `results/llmlabel_selfcheck*_test.json`. **Done when:** both models are scored.
+- **Do:** run the step 12 cell in `plan.ipynb`. It asks Qwen2.5-1.5B-Instruct and Qwen2.5-0.5B-Instruct to list the
+  unsupported words in answers: first on 300 RAGTruth test answers (the same ones the 7B labeller had), later on the
+  pilot set (step 20). Our teacher and students are scored on the same 300 answers; an unreadable reply counts as no marks.
+- **Output:** `results/llmlabel_selfcheck05_test.json`, `results/llmlabel_selfcheck15_test.json` and a table in the
+  notebook. **Done when:** both models are scored.
 
 ## Phase D — Size and speed (week 2)
 

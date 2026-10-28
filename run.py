@@ -543,6 +543,28 @@ def extra_sets(p):
     return sorted(d for d in os.listdir(p['extra']) if os.path.isdir(os.path.join(p['extra'], d)) and '_limit' not in d)
 
 
+CHECKERS = ['ld_large', 'ld_base', 'tiny17m', 'tiny68m', 'hard17m-8ep', 'kd17m', 'hard68m-8ep', 'kd68m']
+
+
+def same_answers(p, samples, found, names=None):
+    """The labeller and our checkers on the same answers, with every answer counted: a reply that could
+    not be read marks nothing (what an app would show). Checker minus labeller with 95% intervals."""
+    lab = [found.get(s['id'], []) for s in samples]
+    out = {'answers': len(samples), 'unreadable_count_as_no_marks': True,
+           'labeller': {'span_f1': score(lab, samples)['all'][2], 'ci95': bootstrap(lab, samples)}, 'checkers': {}}
+    for n in names or CHECKERS:
+        path = os.path.join(p['preds'], f'{n}_test.json.gz')
+        if not os.path.exists(path):
+            continue
+        with gzip.open(path, 'rt', encoding='utf-8') as fh:
+            if not {s['id'] for s in samples} <= set(json.load(fh)['ids']):
+                continue                      # scored on another subset (--limit)
+        sp = all_spans(load_preds(path, samples))
+        out['checkers'][n] = {'span_f1': score(sp, samples)['all'][2], 'ci95': bootstrap(sp, samples),
+                              'minus_labeller_ci95': bootstrap(sp, samples, base=lab)}
+    return out
+
+
 def cmd_llmlabel(args, p):
     """A large language model labels answers the PsiloQA way (odh/llmlabel.py): the new answers of
     the answering models (--on extra, for training), or a fixed subset of RAGTruth test answers
@@ -620,12 +642,17 @@ def cmd_llmlabel(args, p):
                 info['teacher_vs_people_same_answers'] = {'span_f1': tsc['all'][2], 'ci95': bootstrap(tspans, kept),
                                                           'by_task': {t: v[2] for t, v in tsc.items() if t != 'all'}}
                 info['labeller_minus_teacher_ci95'] = bootstrap(spans, kept, base=tspans)
+        if tag == 'test':                     # every answer counts; our checkers on the same answers
+            info['all_answers'] = same_answers(p, samples, found, args.names)
         write_json(os.path.join(p['results'], f'llmlabel_{args.name}_{tag}.json'), info)
         line = f'{tag}: {len(ids)} of {len(samples)} answers labelled, {unusable} replies unusable'
         if 'labeller_vs_people' in info:
             line += (f'; span F1 against people {info["labeller_vs_people"]["span_f1"]}'
                      + (f' (our teacher on the same answers: {info["teacher_vs_people_same_answers"]["span_f1"]})'
                         if 'teacher_vs_people_same_answers' in info else ''))
+        if 'all_answers' in info:
+            line += (f'; on all {len(samples)} answers, an unreadable reply counted as no marks: '
+                     f'{info["all_answers"]["labeller"]["span_f1"]}')
         print(line)
 
 
@@ -704,7 +731,7 @@ def cmd_psilo(args, p):
 def cmd_compare(args, p):
     """Pairs of runs side by side (A:B): B minus A with its 95% interval, on the RAGTruth test set
     (at 0.5 and at each run's dev cut-off) and, when both were scored, on PsiloQA by answer-model
-    size. Writes results/compare.md."""
+    size. Writes results/compare.md (or the file named with --out)."""
     _, _, test = data.splits(data.load_ragtruth(args.data_dir))
     gold = load_psilo_gold(p) if os.path.exists(psilo_gold_path(p)) else None
     if gold:
@@ -751,7 +778,7 @@ def cmd_compare(args, p):
     lines.append('\nEach cell: span F1 of A → span F1 of B (B minus A, 95% interval from resampling sources). '
                  'PsiloQA columns: cut-off 0.5, grouped by the size of the model that wrote the answer.')
     md = '\n'.join(lines)
-    with open(os.path.join(p['results'], 'compare.md'), 'w', encoding='utf-8') as fh:
+    with open(os.path.join(p['results'], args.out or 'compare.md'), 'w', encoding='utf-8') as fh:
         fh.write(md + '\n')
     print(md)
 
@@ -932,7 +959,8 @@ def main():
                     help='train with --teacher: weight of the human label (the teacher gets 1 - alpha)')
     ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
     ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
-    ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones)')
+    ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones); '
+                    'llmlabel --on test: checkers scored on the same answers')
     ap.add_argument('--extra-teacher', help='train: who labels the new answers (default: --teacher), e.g. gpt4o')
     ap.add_argument('--extra-hard', action='store_true', help='train: round the labels of the new answers to 0 or 1')
     ap.add_argument('--extra-max', type=int, help='train: use at most this many new answers (same share per model)')
@@ -947,6 +975,7 @@ def main():
     ap.add_argument('--on', choices=['extra', 'test'], default='extra',
                     help='llmlabel: label the new answers (extra) or 300 RAGTruth test answers (test)')
     ap.add_argument('--pairs', nargs='+', help='compare: pairs of runs A:B, e.g. kd17m:kdlarge17m')
+    ap.add_argument('--out', help='compare: file name in results/ (default compare.md), e.g. compare_step5.md')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
     if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare') \
@@ -960,6 +989,8 @@ def main():
         ap.error('--extra needs --teacher (the new answers have no human labels)')
     if args.name and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.name):
         ap.error('--name may use letters, digits, ".", "_" and "-"')
+    if args.out and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.md', args.out):
+        ap.error('--out must be a plain file name ending in .md, e.g. compare_step5.md')
     if args.step == 'train' and not args.base:
         ap.error('train needs --base')
     p = paths(args.work_dir)
