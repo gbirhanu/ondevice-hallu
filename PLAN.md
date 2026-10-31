@@ -1,7 +1,7 @@
 # Experiment plan: a compact word-level hallucination checker for offline RAG
 
 **Period:** 20 October – 19 November 2026 (one month) · **People:** Gemechu Birhanu, one colleague, Claude (assistant)
-**Last updated:** 28 October 2026
+**Last updated:** 31 October 2026
 
 ## How to use this plan
 
@@ -12,27 +12,34 @@
 - The [rules](#rules) and the [success criteria](#success-criteria-fixed-before-the-new-runs) apply to every step.
   They are fixed now, before the new runs, so we cannot bend them to fit the results later.
 
-## Where we stand (single training runs, 16–19 October 2026)
+## Where we stand (3 training runs each, 31 October 2026)
 
-Span F1 (cut-off 0.5). RAGTruth: 2,700 test answers, people's labels. PsiloQA: 4,000 English answers, GPT-4o labels,
-never used for training.
+Span F1 (cut-off 0.5), mean ± spread over the training runs. RAGTruth: 2,700 test answers, people's labels.
+PsiloQA: 4,000 English answers, GPT-4o labels, never used for training. All numbers: `results/summary.md`.
 
 | Checker | Size | RAGTruth | PsiloQA |
 |---|---|---|---|
 | LettuceDetect-large (our teacher, published) | 396M | 58.92 | 70.22 |
 | LettuceDetect-base (published) | 150M | 55.43 | 69.60 |
 | TinyLettuce 68M / 17M (published) | 68M / 17M | 50.05 / 44.26 | 69.38 / 66.45 |
-| **Ours 68M, distilled** | 68M | **56.02** | **70.64** |
-| Ours 68M, people's labels only | 68M | 53.48 | 68.73 |
-| **Ours 17M, distilled** | 17M | **44.77** | **62.55** |
-| Ours 17M, people's labels only | 17M | 39.25 | 61.15 |
+| **Ours 68M, distilled** | 68M | **56.22 ± 0.42** | **70.37 ± 0.24** |
+| Ours 68M, people's labels only | 68M | 54.19 ± 1.49 | 69.43 ± 0.91 |
+| **Ours 17M, distilled** | 17M | **45.64 ± 3.92** | **63.66 ± 2.45** |
+| Ours 17M, people's labels only | 17M | 41.26 ± 3.78 | 61.79 ± 3.01 |
+| Chat models asked to mark the errors: Qwen2.5-0.5B / 1.5B / 7B (300 test answers) | 0.5–7B | 5.4 / 3.5 / 11.1 | — |
 
-- Distillation helps at both sizes and on both test sets. Our 68M beats TinyLettuce-68M and ties with the teacher on PsiloQA.
-- Test A (17M): new answers from small models (0.5–1.7B) teach better than the same number from 7B models
-  (PsiloQA +2.5 [1.79, 3.17]); on RAGTruth no clear difference.
+- Distillation helps at 17M on both test sets (+4.38 and +1.87, all runs agree) and at 68M on RAGTruth (+2.03,
+  all runs agree). At 68M on PsiloQA it is +0.94 [0.64, 1.24] on average, but one of the three runs was −0.19,
+  so by rule R3 it does not count.
+- Our 68M beats TinyLettuce-68M in all three runs on both test sets (+6.17 and +0.99), reaches 95.4% of the
+  6× larger teacher on RAGTruth and ties with it on PsiloQA (+0.15, no clear difference).
+- Test A: who writes the new answers makes no clear difference. At 17M, small-model answers give +0.97 on
+  PsiloQA on average, but one of three runs went the other way; at 68M (one run) +0.29. The earlier +2.5 was one run.
 - Test B: a free 7B chat model is a poor labeller (11.1 span F1 against people, our teacher 63.0).
-- Weak point: at 17M, TinyLettuce-17M is better on PsiloQA (−3.9).
-- All of this is one training run each. Making it solid is the first job of this month.
+- Phone-sized chat models cannot check answers: 3.5–5.4 span F1, against 59.7 for our 68M checker on the same
+  300 answers. A separate small checker is needed.
+- Weak points: at 17M, TinyLettuce-17M is better on PsiloQA (−2.79; on answers by models up to 2B −3.79, in all
+  runs); and 17M training varies a lot between runs (± 3.8 points on RAGTruth, against ± 0.4 at 68M).
 
 ## What we will claim, and what we must not claim
 
@@ -69,14 +76,14 @@ From the literature review of 20 October 2026 (FastTrack connector, full texts o
 
 ## Success criteria (fixed before the new runs)
 
-| | Claim | Success if | Now (1 run) |
+| | Claim | Success if | Now (3 runs, 31 Oct) |
 |---|---|---|---|
-| S1 | Teacher + small-model answers help | ≥ +2 span F1 over people's labels only on RAGTruth, at 17M and 68M, and above zero on PsiloQA | +5.5 / +2.5; +1.4 / +1.9 |
-| S2 | Best checker of its size | Our 68M beats TinyLettuce-68M on all three test sets | +6.0, +1.3, pilot not built |
-| S3 | Close to the 6× larger teacher | Our 68M reaches ≥ 95% of the teacher's span F1 on RAGTruth and ≥ 100% on PsiloQA | 95.1%, 100.6% (borderline) |
-| S4 | Small-model answers are the better source | Small ≥ 7B on PsiloQA in all 3 runs at 17M and in the 68M run, and step 10 or 11 explains why | +2.5 at 17M |
-| S5 | Fits on a phone | 8-bit loses ≤ 1 point; file ≤ 150 MB; ≤ 2 s per answer on a mid-range phone (fallback: ≤ 1 s on one laptop CPU core) | not measured |
-| S6 | Works on the real target | Annotators agree (word-level κ ≥ 0.6); our 68M beats TinyLettuce-68M and the self-check baseline | not built |
+| S1 | Teacher + small-model answers help | ≥ +2 span F1 over people's labels only on RAGTruth, at 17M and 68M, and above zero on PsiloQA | **not met**: 17M met (+4.38; +1.87); 68M RAGTruth +2.03 met, PsiloQA +0.94 but one run −0.19 |
+| S2 | Best checker of its size | Our 68M beats TinyLettuce-68M on all three test sets | +6.17 and +0.99, all runs (met on 2 of 3); pilot not built |
+| S3 | Close to the 6× larger teacher | Our 68M reaches ≥ 95% of the teacher's span F1 on RAGTruth and ≥ 100% on PsiloQA | **met**: 95.4%, 100.2% |
+| S4 | Small-model answers are the better source | Small ≥ 7B on PsiloQA in all 3 runs at 17M and in the 68M run, and step 10 or 11 explains why | **not met**: 17M +0.97, one run −0.56; 68M +0.29 (one run) |
+| S5 | Fits on a phone | 8-bit loses ≤ 1 point; file ≤ 150 MB; ≤ 2 s per answer on a mid-range phone (fallback: ≤ 1 s on one laptop CPU core) | not measured (steps 13–14) |
+| S6 | Works on the real target | Annotators agree (word-level κ ≥ 0.6); our 68M beats TinyLettuce-68M and the self-check baseline | self-check baseline measured (3.5–5.4); pilot not built |
 
 S1, S2 and S5 are enough for a solid paper. S3 and S6 make it strong. S4 with steps 10–11 is the new finding.
 
@@ -146,7 +153,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 5. In one sentence each: what do PsiloQA and Enoki do that is close to us, and what is different?
 
 ### Step 2 — Fix the evaluation in writing
-- [ ] **Who:** Claude drafts; Gemechu and the colleague agree. **Needs:** step 1a read. **Time:** 1 hour.
+- [x] **Who:** Claude drafts; Gemechu and the colleague agree. **Needs:** step 1a read. **Time:** 1 hour.
 - **Do:** Claude writes `EVALUATION.md` with the rules, the success criteria, the three test sets, the measures
   (span F1 at 0.5 and at the dev cut-off; answer-level F1 for comparison with published numbers; size, memory and time)
   and how intervals are computed. Commit it with the date **before** steps 6 and 7 start.
@@ -160,7 +167,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 ## Phase B — Make the main result solid (week 1)
 
 ### Step 4 — Code for repeated runs and averaged tables
-- [ ] **Who:** Claude. **Needs:** nothing. **Time:** half a day.
+- [x] **Who:** Claude. **Needs:** nothing. **Time:** half a day.
 - **Do:**
   - Run names with a seed suffix: `<run>-s2`, `<run>-s3` (seed 42 keeps the plain name). `run.py train --seed` already exists.
   - A new `summary` command: for groups of runs, the mean and spread over seeds on RAGTruth (0.5 and dev cut-off) and
@@ -171,7 +178,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Output:** pushed code and notebook. **Done when:** the tests pass and Gemechu has pushed.
 
 ### Step 5 — Test A at 68M (runs now)
-- [ ] **Who:** Gemechu on Colab. **Needs:** nothing (the cell is ready). **Time:** about 2.5 GPU hours.
+- [x] **Who:** Gemechu on Colab. **Needs:** nothing (the cell is ready). **Time:** about 2.5 GPU hours.
 - **Do:** open `colab/plan.ipynb`
   ([Colab](https://colab.research.google.com/github/gbirhanu/ondevice-hallu/blob/main/colab/plan.ipynb)), run the two
   setup cells, then the step 5 cell. It trains `kd68m-n4509` and `kdlarge68m`, scores them on RAGTruth and PsiloQA and
@@ -179,17 +186,17 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Output:** `kd68m-n4509`, `kdlarge68m` and their scores on Drive. **Done when:** `compare_step5.md` has the 68M row.
 
 ### Step 6 — Two more seeds of the main runs
-- [ ] **Who:** Gemechu. **Needs:** steps 2 and 4. **Time:** about 6 GPU hours (68M runs take about 75 minutes each).
+- [x] **Who:** Gemechu. **Needs:** steps 2 and 4. **Time:** about 6 GPU hours (68M runs take about 75 minutes each).
 - **Do:** run the step 6 cell: `hard17m-8ep`, `kd17m`, `hard68m-8ep` and `kd68m`, each with seeds 2 and 3 (8 runs).
 - **Output:** 8 new runs scored on RAGTruth and PsiloQA. **Done when:** all 8 appear in `summary.md`.
 
 ### Step 7 — Two more seeds of test A at 17M
-- [ ] **Who:** Gemechu. **Needs:** steps 2 and 4. **Time:** about 1 GPU hour.
+- [x] **Who:** Gemechu. **Needs:** steps 2 and 4. **Time:** about 1 GPU hour.
 - **Do:** run the step 7 cell: `kd17m-n4509` and `kdlarge17m`, each with seeds 2 and 3.
 - **Output:** 4 new runs. **Done when:** they appear in `summary.md`.
 
 ### Step 8 — Read the averaged results and check S1–S4
-- [ ] **Who:** Claude. **Needs:** steps 5–7. **Time:** 1 hour.
+- [x] **Who:** Claude. **Needs:** steps 5–7. **Time:** 1 hour.
 - **Do:** read `summary.md`; check S1, S2 (two of three test sets), S3 and the test A part of S4 against the rules;
   write the result in the status log; update the concept note's numbers.
 - **Decision:** if S1 fails at 68M, report 17M and the PsiloQA gains, and consider more new answers (after the month).
@@ -222,7 +229,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Why it matters:** if it wins, it is a new method, not only an observation.
 
 ### Step 12 — Baseline: the phone's own model checks itself
-- [ ] **Who:** Gemechu runs (code exists: `llmlabel --local`). **Needs:** nothing (runs now). **Time:** about 1 GPU hour.
+- [x] **Who:** Gemechu runs (code exists: `llmlabel --local`). **Needs:** nothing (runs now). **Time:** about 1 GPU hour.
 - **Do:** run the step 12 cell in `plan.ipynb`. It asks Qwen2.5-1.5B-Instruct and Qwen2.5-0.5B-Instruct to list the
   unsupported words in answers: first on 300 RAGTruth test answers (the same ones the 7B labeller had), later on the
   pilot set (step 20). Our teacher and students are scored on the same 300 answers; an unreadable reply counts as no marks.
@@ -233,8 +240,10 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 
 ### Step 13 — 8-bit files and their accuracy
 - [ ] **Who:** Gemechu runs; Claude adds PsiloQA scoring for 8-bit files. **Needs:** step 8. **Time:** about 1 hour.
-- **Do:** `export` and `check8bit --n 2700` for `kd17m` and `kd68m` (full RAGTruth test set), then the same on PsiloQA.
-- **Output:** `results/kd*_int8.json` with the change in span F1 and its interval; file sizes.
+- **Do:** run the step 13 cell of `plan.ipynb` on a CPU runtime (no GPU needed, about 2 hours): `export` and
+  `check8bit --n 2700 --psilo` for `kd17m` and `kd68m` (all RAGTruth test answers and the PsiloQA answers).
+- **Output:** `results/kd*_int8_n2700.json` and `kd*_int8_psilo.json` with the change in span F1 and its interval;
+  file sizes in `kd*_export.json`.
 - **Done when:** the change is known for both models (S5: ≤ 1 point).
 
 ### Step 14 — Time and memory on a laptop CPU
@@ -335,5 +344,10 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 19 Oct | — | Tests A and B at 17M; PsiloQA scores; 68M checks | `results/compare_novelty.md` (tests A, B), `compare.md` (68M checks), `psilo.md` |
 | 20 Oct | — | Literature review (FastTrack); gap reworded; this plan written | `PLAN.md` |
 | | 1 | | |
-| 28 Oct | 2 | `EVALUATION.md` drafted by Claude; Gemechu and the colleague agree, then push it before steps 6 and 7 | `EVALUATION.md` |
+| 28 Oct | 2 | `EVALUATION.md` drafted by Claude, accepted as written by Gemechu and the colleague, pushed | `EVALUATION.md` |
 | 28 Oct | 4 | Seed runs (`<run>-s2`, `-s3`, recipe checked by `train`), `summary` command, `plan.ipynb` with steps 5, 6, 7, 12 and the averaged tables; 39 tests pass | `run.py`, `colab/plan.ipynb` |
+| 28 Oct | 5 | Test A at 68M (one run): small-model vs 7B answers, no clear difference (RAGTruth +0.32 [−1.31, 1.79], PsiloQA +0.29 [−0.13, 0.69]; at 17M PsiloQA +2.50). With 4,509 instead of 6,719 new answers the 68M student loses 0.50 [0.18, 0.79] on PsiloQA. Each run 67 minutes | `results/compare_step5.md` |
+| 28–30 Oct | 6 | 8 runs: seeds 2 and 3 of `hard17m-8ep`, `kd17m`, `hard68m-8ep`, `kd68m` | `results/summary.md` |
+| 30 Oct | 7 | 4 runs: seeds 2 and 3 of `kd17m-n4509`, `kdlarge17m` | `results/summary.md` |
+| 31 Oct | 8 | S1 not met (68M PsiloQA: +0.94 [0.64, 1.24] but one run −0.19); S2 met on RAGTruth and PsiloQA, pilot to come; S3 met (95.4%, 100.2%); S4 not met (17M +0.97 [0.53, 1.37] for small-model answers, one run −0.56). 17M runs vary ± 3.8 points | `results/summary.md` |
+| 31 Oct | 12 | Chat models as the checker, 300 test answers: Qwen2.5-0.5B 5.4, 1.5B 3.5, 7B 11.1; on the same answers our `kd68m` 59.7, `kd17m` 42.8, the teacher 63.0 | `results/llmlabel_selfcheck*_test.json` |

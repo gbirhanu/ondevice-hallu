@@ -228,28 +228,67 @@ def cmd_export(args, p):
 
 
 def cmd_check8bit(args, p):
-    out = os.path.join(p['results'], f'{args.name}_int8.json')
-    if done(out, args, args.recipe):
-        return
+    """What 8-bit costs: span F1 of the 8-bit ONNX file against the full-precision model's own
+    predictions, on a fixed subset of --n RAGTruth test answers (--n 2700: all of them), and with
+    --psilo also on the PsiloQA answers, by answer-model size. Runs on the CPU, one answer at a time.
+    Writes results/<name>_int8.json (300 answers) or <name>_int8_n<N>.json, and <name>_int8_psilo.json."""
     from transformers import AutoTokenizer
     from odh import cpu
     _, _, test = data.splits(data.load_ragtruth(args.data_dir))
     sub = data.subset(test, args.n)
+    out = os.path.join(p['results'], f'{args.name}_int8.json' if args.n == 300 else f'{args.name}_int8_n{args.n}.json')
+    qout = os.path.join(p['results'], f'{args.name}_int8_psilo.json')
+    todo = not done(out, args, args.recipe)
+    todo_psilo = bool(args.psilo) and not done(qout, args, args.recipe)
+    if not (todo or todo_psilo):
+        return
     folder = make_onnx(args, p, model_of(p, args.name, args.model))[0]
     tok = AutoTokenizer.from_pretrained(folder)
-    full = all_spans(load_preds(os.path.join(p['preds'], f'{args.name}_test.json.gz'), sub))
-    print(f'Running the 8-bit model of {args.name} on {len(sub)} test answers on the CPU.')
+    sess = cpu.session(os.path.join(folder, 'model_int8.onnx'))
+    if todo:
+        full = all_spans(load_preds(os.path.join(p['preds'], f'{args.name}_test.json.gz'), sub))
+        print(f'Running the 8-bit model of {args.name} on {len(sub)} test answers on the CPU.')
+        t0 = time.time()
+        int8 = all_spans(cpu.predict(sess, tok, sub, args.max_length))
+        a, b = score(full, sub)['all'][2], score(int8, sub)['all'][2]
+        result = {'name': args.name, 'recipe': args.recipe, 'answers': len(sub),
+                  'span_f1_full_precision': a, 'span_f1_int8': b,
+                  'change': round(b - a, 2), 'change_ci95': bootstrap(int8, sub, base=full),
+                  'seconds': round(time.time() - t0)}
+        write_json(out, result)
+        print(f'{args.name}: span F1 on {len(sub)} answers {a} -> {b} in 8-bit '
+              f'(change {result["change"]:+.2f}, 95% interval {result["change_ci95"]}).')
+    if todo_psilo:
+        check8bit_psilo(args, p, sess, tok, qout)
+
+
+def check8bit_psilo(args, p, sess, tok, out):
+    """The 8-bit file against the full-precision model on the PsiloQA answers, by answer-model size."""
+    from odh import cpu, psilo
+    fp = os.path.join(p['preds'], f'{args.name}_psilo.json.gz')
+    if not (os.path.exists(psilo_gold_path(p)) and os.path.exists(fp)):
+        raise SystemExit(f'Score {args.name} on PsiloQA first ("psilo"), then run check8bit --psilo again.')
+    gold = load_psilo_gold(p)
+    for g in gold:
+        g['spans'] = [tuple(x) for x in g['spans']]
+    by_id = {s['id']: s for s in psilo.load()}
+    gold = [g for g in gold if g['id'] in by_id]
+    print(f'Running the 8-bit model of {args.name} on {len(gold)} PsiloQA answers on the CPU.')
     t0 = time.time()
-    int8_tokens = cpu.predict(cpu.session(os.path.join(folder, 'model_int8.onnx')), tok, sub, args.max_length)
-    int8 = all_spans(int8_tokens)
-    a, b = score(full, sub)['all'][2], score(int8, sub)['all'][2]
-    result = {'name': args.name, 'recipe': args.recipe, 'answers': len(sub),
-              'span_f1_full_precision': a, 'span_f1_int8': b,
-              'change': round(b - a, 2), 'change_ci95': bootstrap(int8, sub, base=full),
-              'seconds': round(time.time() - t0)}
-    write_json(out, result)
-    print(f'{args.name}: span F1 on {len(sub)} answers {a} -> {b} in 8-bit '
-          f'(change {result["change"]:+.2f}, 95% interval {result["change_ci95"]}).')
+    full = all_spans(load_preds(fp, gold))
+    int8 = all_spans(cpu.predict(sess, tok, [by_id[g['id']] for g in gold], args.max_length))
+    groups = {}
+    for grp in psilo_groups(gold):
+        idx = [i for i, x in enumerate(gold) if grp == 'all' or x['size_group'] == grp]
+        s2, f2, i2 = [gold[i] for i in idx], [full[i] for i in idx], [int8[i] for i in idx]
+        a, b = score(f2, s2)['all'][2], score(i2, s2)['all'][2]
+        groups[grp] = {'answers': len(idx), 'span_f1_full_precision': a, 'span_f1_int8': b,
+                       'change': round(b - a, 2), 'change_ci95': bootstrap(i2, s2, base=f2)}
+    write_json(out, {'name': args.name, 'recipe': args.recipe, 'answers': len(gold), 'groups': groups,
+                     'seconds': round(time.time() - t0)})
+    a = groups['all']
+    print(f'{args.name}: span F1 on {len(gold)} PsiloQA answers {a["span_f1_full_precision"]} -> '
+          f'{a["span_f1_int8"]} in 8-bit (change {a["change"]:+.2f}, 95% interval {a["change_ci95"]}).')
 
 
 def cmd_bench(args, p):
@@ -1145,7 +1184,10 @@ def main():
     ap.add_argument('--work-dir', default='work')
     ap.add_argument('--onnx-dir', help='where ONNX files go (default: <work-dir>/onnx); they are remade when missing')
     ap.add_argument('--max-length', type=int, default=4096)
-    ap.add_argument('--n', type=int, default=300, help='check8bit / bench: answers in the fixed test subset')
+    ap.add_argument('--n', type=int, default=300, help='check8bit / bench: answers in the fixed test subset '
+                    '(2700: all test answers)')
+    ap.add_argument('--psilo', action='store_true', help='check8bit: also on the PsiloQA answers (score them with '
+                    '"psilo" first)')
     ap.add_argument('--threads', type=int, nargs='+', default=[1, 2], help='bench: CPU threads to try')
     ap.add_argument('--where', default='colab', help='bench: a label for this machine, e.g. laptop')
     ap.add_argument('--recipe', default='w8', choices=['w8', 'mix', 'dyn'],

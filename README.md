@@ -84,8 +84,8 @@ differences with 95% intervals.
 
 `colab/plan.ipynb` has one cell for each step of [PLAN.md](PLAN.md) that needs the GPU, numbered like the plan
 (now: step 5, test A at 68M; steps 6 and 7, two more training runs of the main students and of test A; the
-averaged tables; step 12, phone-sized chat models as the checker). Run the two setup cells, then only the cell of
-the step you are doing. A run named `kd17m-s2` is `kd17m` trained again with seed 2; `train` refuses such a run if
+averaged tables; step 12, phone-sized chat models as the checker; step 13, the 8-bit files, on a CPU runtime).
+Run the two setup cells, then only the cell of the step you are doing. A run named `kd17m-s2` is `kd17m` trained again with seed 2; `train` refuses such a run if
 its recipe differs from the first run's, and `summary` averages the runs and says which differences count.
 
 ## Commands
@@ -94,7 +94,7 @@ its recipe differs from the first run's, and `summary` averages the runs and say
 python run.py models                               # find the published small detectors
 python run.py score     --name tiny68m             # span F1 on the full test set
 python run.py export    --name tiny68m             # ONNX + 8-bit (--recipe w8 | mix | dyn)
-python run.py check8bit --name tiny68m --n 300     # F1 change from 8-bit
+python run.py check8bit --name tiny68m --n 300     # F1 change from 8-bit (--n 2700: all; --psilo: PsiloQA too)
 python run.py bench     --name tiny68m --threads 1 2 --where colab
 python run.py table                                # results/table.md + results/ladder.png
 python run.py train     --name mine68m --base jhu-clsp/ettin-encoder-68m   # our own model
