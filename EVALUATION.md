@@ -138,4 +138,5 @@ finding. A criterion that is met on one test set but not on another is **not met
 
 | Date | Change | Reason | Agreed by |
 |---|---|---|---|
-| — | none yet | | |
+| 1 Nov 2026 | Step 10 dropped, step 11 made optional | Test A showed no clear difference, so S4 is not met and there is no gap left to explain; S4 stays "not met" | Gemechu |
+| 1 Nov 2026 | Exploratory speed tests of the 8-bit `kd68m`: the `mix` recipe and inputs cut to 1,024 tokens (step 14b) | Step 14 missed the speed target (1.66 s on one laptop core); S5 stays judged on the planned 8-bit file, and the variants are reported as exploratory | Gemechu |

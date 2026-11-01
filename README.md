@@ -26,7 +26,9 @@ to 8 bits with one scale for the whole input. ModernBERT-type models feed some l
 with a few values thousands of times larger than the rest; one scale then rounds the ordinary
 values to zero, and span F1 fell by 21 to 50 points. `--recipe mix` keeps 8-bit arithmetic only
 in the layers whose inputs are safe; it is faster but less exact. `export` reports, per model,
-how close the 8-bit file is to the float file and how many layers have such extreme inputs.
+how close the 8-bit file is to the float file and how many layers have such extreme inputs. Results made
+with another recipe or a shorter input (`--max-length`) are saved under their own names (for example
+`kd68m_int8_mix_len1024_n2700.json`), so they never replace the planned ones.
 
 ## Run it on Colab (first experiment: the size ladder)
 
@@ -113,10 +115,12 @@ python run.py compare   --pairs kd68m-n4509:kdlarge68m --out compare_step5.md   
 python run.py llmlabel  --name selfcheck15 --local qwen2.5-1.5b --on test   # a phone-sized chat model as the checker
 python run.py train     --name kd17m-s2 --seed 2 --base jhu-clsp/ettin-encoder-17m ...   # kd17m again, seed 2
 python run.py summary                              # mean ± spread over seeds; which differences count
+python run.py density                              # how many errors each set of answers holds (no GPU)
 ```
 
-All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: copy the
-`work` folder from Drive, then `python run.py bench --name tiny68m --threads 1 4 --where laptop`.
+All take `--data-dir` (RAGTruth) and `--work-dir`. Timing on your own laptop: download a trained model folder
+from Drive (e.g. `work/models/kd68m`), then
+`python run.py bench --name kd68m --model work/models/kd68m --threads 1 2 --where laptop --data-dir ../RAGTruth`.
 
 ## Code
 

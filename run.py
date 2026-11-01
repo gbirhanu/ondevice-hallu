@@ -20,6 +20,7 @@
     python run.py compare --pairs kd17m:kdlarge17m kd17m:llm17m   # differences with 95% intervals
     python run.py train  --name kd17m-s2 --seed 2 ...   # kd17m again with seed 2 (same recipe, checked)
     python run.py summary                         # mean and spread over seeds; differences that count
+    python run.py density                         # how many errors each set of answers holds (no GPU)
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -190,8 +191,17 @@ def make_onnx(args, p, name):
     return folder, fp32, int8, params, made
 
 
+def variant(args, length=True):
+    """'' for the planned 8-bit file (recipe w8, inputs of up to 4,096 tokens); otherwise e.g. '_mix',
+    '_len1024' or '_mix_len1024', so that results with other settings never replace the planned ones."""
+    v = '' if args.recipe == 'w8' else f'_{args.recipe}'
+    if length and args.max_length != 4096:
+        v += f'_len{args.max_length}'
+    return v
+
+
 def cmd_export(args, p):
-    out = os.path.join(p['results'], f'{args.name}_export.json')
+    out = os.path.join(p['results'], f'{args.name}_export{variant(args, length=False)}.json')
     if done(out, args, args.recipe):
         make_onnx(args, p, model_of(p, args.name, args.model))
         return
@@ -231,13 +241,15 @@ def cmd_check8bit(args, p):
     """What 8-bit costs: span F1 of the 8-bit ONNX file against the full-precision model's own
     predictions, on a fixed subset of --n RAGTruth test answers (--n 2700: all of them), and with
     --psilo also on the PsiloQA answers, by answer-model size. Runs on the CPU, one answer at a time.
-    Writes results/<name>_int8.json (300 answers) or <name>_int8_n<N>.json, and <name>_int8_psilo.json."""
+    Writes results/<name>_int8.json (300 answers) or <name>_int8_n<N>.json, and <name>_int8_psilo.json;
+    with another recipe or --max-length the names carry it, e.g. <name>_int8_mix_len1024_n2700.json."""
     from transformers import AutoTokenizer
     from odh import cpu
     _, _, test = data.splits(data.load_ragtruth(args.data_dir))
     sub = data.subset(test, args.n)
-    out = os.path.join(p['results'], f'{args.name}_int8.json' if args.n == 300 else f'{args.name}_int8_n{args.n}.json')
-    qout = os.path.join(p['results'], f'{args.name}_int8_psilo.json')
+    v = variant(args)
+    out = os.path.join(p['results'], f'{args.name}_int8{v}.json' if args.n == 300 else f'{args.name}_int8{v}_n{args.n}.json')
+    qout = os.path.join(p['results'], f'{args.name}_int8{v}_psilo.json')
     todo = not done(out, args, args.recipe)
     todo_psilo = bool(args.psilo) and not done(qout, args, args.recipe)
     if not (todo or todo_psilo):
@@ -251,7 +263,7 @@ def cmd_check8bit(args, p):
         t0 = time.time()
         int8 = all_spans(cpu.predict(sess, tok, sub, args.max_length))
         a, b = score(full, sub)['all'][2], score(int8, sub)['all'][2]
-        result = {'name': args.name, 'recipe': args.recipe, 'answers': len(sub),
+        result = {'name': args.name, 'recipe': args.recipe, 'max_length': args.max_length, 'answers': len(sub),
                   'span_f1_full_precision': a, 'span_f1_int8': b,
                   'change': round(b - a, 2), 'change_ci95': bootstrap(int8, sub, base=full),
                   'seconds': round(time.time() - t0)}
@@ -284,15 +296,15 @@ def check8bit_psilo(args, p, sess, tok, out):
         a, b = score(f2, s2)['all'][2], score(i2, s2)['all'][2]
         groups[grp] = {'answers': len(idx), 'span_f1_full_precision': a, 'span_f1_int8': b,
                        'change': round(b - a, 2), 'change_ci95': bootstrap(i2, s2, base=f2)}
-    write_json(out, {'name': args.name, 'recipe': args.recipe, 'answers': len(gold), 'groups': groups,
-                     'seconds': round(time.time() - t0)})
+    write_json(out, {'name': args.name, 'recipe': args.recipe, 'max_length': args.max_length, 'answers': len(gold),
+                     'groups': groups, 'seconds': round(time.time() - t0)})
     a = groups['all']
     print(f'{args.name}: span F1 on {len(gold)} PsiloQA answers {a["span_f1_full_precision"]} -> '
           f'{a["span_f1_int8"]} in 8-bit (change {a["change"]:+.2f}, 95% interval {a["change_ci95"]}).')
 
 
 def cmd_bench(args, p):
-    out = os.path.join(p['results'], f'{args.name}_bench_{args.where}.json')
+    out = os.path.join(p['results'], f'{args.name}_bench_{args.where}{variant(args)}.json')
     if done(out, args, args.recipe):
         return
     from transformers import AutoTokenizer
@@ -311,12 +323,23 @@ def cmd_bench(args, p):
                   f'90th percentile {r["p90_ms"]} ms per answer ({r["mean_tokens"]} tokens on average); '
                   f'memory added by the model {r["model_mem_mb"]} MB')
     import onnxruntime
-    write_json(out, {'name': args.name, 'recipe': args.recipe, 'where': args.where, 'cpu': cpu_name(),
-                     'cores': os.cpu_count(), 'onnxruntime': onnxruntime.__version__, 'rows': rows})
+    import platform
+    import psutil
+    write_json(out, {'name': args.name, 'recipe': args.recipe, 'max_length': args.max_length,
+                     'variant': variant(args).lstrip('_') or None, 'where': args.where, 'cpu': cpu_name(),
+                     'cores': os.cpu_count(), 'ram_gb': round(psutil.virtual_memory().total / 2**30, 1),
+                     'os': platform.platform(), 'onnxruntime': onnxruntime.__version__, 'rows': rows})
 
 
 def cpu_name():
     import platform
+    if platform.system() == 'Windows':           # the name shown in Windows' system information
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:
+                return winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
+        except OSError:
+            pass
     try:
         with open('/proc/cpuinfo') as fh:
             text = fh.read()
@@ -1031,6 +1054,72 @@ def cmd_summary(args, p):
     print(md)
 
 
+def error_counts(answers, spans):
+    """How many errors a set of answers holds: share of answers with at least one marked span, share of
+    marked characters, and words per answer."""
+    n = len(answers)
+    chars = sum(len(a['answer']) for a in answers)
+    marked = sum(e - s for sp in spans for s, e in sp)
+    return {'answers': n, 'with_errors_pct': round(100 * sum(1 for sp in spans if sp) / max(n, 1), 1),
+            'marked_chars_pct': round(100 * marked / max(chars, 1), 2),
+            'words_per_answer': round(sum(len(a['answer'].split()) for a in answers) / max(n, 1), 1)}
+
+
+def cmd_density(args, p):
+    """Step 9: how many errors each set of answers holds. The new answers of every answering model as the
+    teacher marks them (cut-off 0.5), and RAGTruth's training answers by answering model as people and as
+    the teacher mark them. Writes results/density.md and density.json. No GPU."""
+    from odh import distill, psilo
+    teacher = args.teacher or 'ld_large'
+    full_train, _, _ = data.splits(data.load_ragtruth(args.data_dir))
+    sources = {s['source_id']: s for s in full_train}
+
+    def size(name):
+        b = psilo.model_size(name)
+        return '' if b is None else (f'{b:g}B' if b >= 1 else f'{1000 * b:g}M')
+
+    rows = []
+    for g in args.generators or extra_sets(p):
+        path = os.path.join(p['preds'], f'{teacher}_extra_{g}.json.gz')
+        extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
+        if not extra or not os.path.exists(path):
+            print(f'Skipped {g}: no new answers or no {teacher} labels for them.')
+            continue
+        labels = teacher_tokens(p, teacher, f'extra_{g}')
+        extra = [s for s in extra if s['id'] in labels]
+        rows.append({'writer': g, 'size': size(g), 'answers_set': 'new answers (training questions)',
+                     'marked_by': teacher, **error_counts(extra, all_spans([labels[s['id']] for s in extra]))})
+    tpath = os.path.join(p['preds'], f'{teacher}_train.json.gz')
+    tlabels = teacher_tokens(p, teacher, 'train') if os.path.exists(tpath) else {}
+    by_model = {}
+    for s in full_train:
+        by_model.setdefault(s['model'], []).append(s)
+    for m in sorted(by_model, key=lambda m: (psilo.model_size(m) or 1e9, m)):
+        answers = by_model[m]
+        rows.append({'writer': m, 'size': size(m), 'answers_set': 'RAGTruth training answers', 'marked_by': 'people',
+                     **error_counts(answers, [s['spans'] for s in answers])})
+        have = [s for s in answers if s['id'] in tlabels]
+        if have:
+            rows.append({'writer': m, 'size': size(m), 'answers_set': 'RAGTruth training answers', 'marked_by': teacher,
+                         **error_counts(have, all_spans([tlabels[s['id']] for s in have]))})
+    lines = ['| Who wrote the answers | Size | Answers | Marked by | Answers with a marked error | Marked characters | '
+             'Words per answer |', '|---|---|---|---|---|---|---|']
+    last = None
+    for r in rows:
+        if r['answers_set'] != last:
+            lines.append(f'| *{r["answers_set"]}* | | | | | | |')
+            last = r['answers_set']
+        lines.append(f'| {r["writer"]} | {r["size"]} | {r["answers"]} | {r["marked_by"]} | {r["with_errors_pct"]}% | '
+                     f'{r["marked_chars_pct"]}% | {r["words_per_answer"]} |')
+    lines.append(f'\nNew answers: written by each model for RAGTruth\'s training questions (step "generate"), marked by '
+                 f'the teacher ({teacher}) at cut-off 0.5. RAGTruth training answers: marked by people and by the teacher.')
+    md = '\n'.join(lines)
+    write_json(os.path.join(p['results'], 'density.json'), {'teacher': teacher, 'rows': rows})
+    with open(os.path.join(p['results'], 'density.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
+
+
 def cmd_signals(args, p):
     """Re-read the answers of one open answering model and record its signals (odh/signals.py)."""
     import math
@@ -1116,6 +1205,8 @@ def cmd_table(args, p):
         for f in sorted(os.listdir(res)):
             if f.startswith(f'{n}_bench_') and f.endswith('.json'):
                 b = read_json(os.path.join(res, f))
+                if b.get('variant'):                  # other 8-bit settings: not part of this table
+                    continue
                 for r in b['rows']:
                     if r['weights'] == 'int8':
                         bench[f'{b["where"]}, {r["threads"]} thr'] = r['median_ms']
@@ -1176,7 +1267,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
                                      'signals', 'fusion', 'teach', 'generate', 'distill', 'llmlabel', 'psilo',
-                                     'compare', 'summary'])
+                                     'compare', 'summary', 'density'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -1231,7 +1322,7 @@ def main():
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
     if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare',
-                         'summary') \
+                         'summary', 'density') \
             and not args.name:
         ap.error('--name is required')
     if args.step in ('signals', 'generate') and not args.generator:
@@ -1253,7 +1344,8 @@ def main():
     {'models': cmd_models, 'score': cmd_score, 'export': cmd_export, 'check8bit': cmd_check8bit,
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
      'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill,
-     'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare, 'summary': cmd_summary}[args.step](args, p)
+     'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare, 'summary': cmd_summary,
+     'density': cmd_density}[args.step](args, p)
 
 
 if __name__ == '__main__':

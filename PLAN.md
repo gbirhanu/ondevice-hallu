@@ -38,6 +38,11 @@ PsiloQA: 4,000 English answers, GPT-4o labels, never used for training. All numb
 - Test B: a free 7B chat model is a poor labeller (11.1 span F1 against people, our teacher 63.0).
 - Phone-sized chat models cannot check answers: 3.5–5.4 span F1, against 59.7 for our 68M checker on the same
   300 answers. A separate small checker is needed.
+- In 8-bit, our 68M is a 73.9 MB file (261 MB in full precision) and loses nothing: −0.03 [−0.16, 0.09] on
+  RAGTruth, 0.00 on PsiloQA. The 17M file is 18.3 MB and loses −0.22 on RAGTruth (not clear) and −0.93 on PsiloQA.
+- On one laptop core (Intel i7-1185G7), the 8-bit 68M needs 1.66 s per answer (median; 1.03 s with 2 threads),
+  over the 1 s target; the 17M needs 0.15 s. Our 8-bit file is not faster than full precision (1.20 s): it keeps
+  the arithmetic in float, so it saves size and memory, not time.
 - Weak points: at 17M, TinyLettuce-17M is better on PsiloQA (−2.79; on answers by models up to 2B −3.79, in all
   runs); and 17M training varies a lot between runs (± 3.8 points on RAGTruth, against ± 0.4 at 68M).
 
@@ -82,7 +87,7 @@ From the literature review of 20 October 2026 (FastTrack connector, full texts o
 | S2 | Best checker of its size | Our 68M beats TinyLettuce-68M on all three test sets | +6.17 and +0.99, all runs (met on 2 of 3); pilot not built |
 | S3 | Close to the 6× larger teacher | Our 68M reaches ≥ 95% of the teacher's span F1 on RAGTruth and ≥ 100% on PsiloQA | **met**: 95.4%, 100.2% |
 | S4 | Small-model answers are the better source | Small ≥ 7B on PsiloQA in all 3 runs at 17M and in the 68M run, and step 10 or 11 explains why | **not met**: 17M +0.97, one run −0.56; 68M +0.29 (one run) |
-| S5 | Fits on a phone | 8-bit loses ≤ 1 point; file ≤ 150 MB; ≤ 2 s per answer on a mid-range phone (fallback: ≤ 1 s on one laptop CPU core) | not measured (steps 13–14) |
+| S5 | Fits on a phone | 8-bit loses ≤ 1 point; file ≤ 150 MB; ≤ 2 s per answer on a mid-range phone (fallback: ≤ 1 s on one laptop CPU core) | **not met on time**: 8-bit loses 0.03 / 0.00 and the file is 73.9 MB, but one laptop core needs 1.66 s per answer (17M: 0.15 s) |
 | S6 | Works on the real target | Annotators agree (word-level κ ≥ 0.6); our 68M beats TinyLettuce-68M and the self-check baseline | self-check baseline measured (3.5–5.4); pilot not built |
 
 S1, S2 and S5 are enough for a solid paper. S3 and S6 make it strong. S4 with steps 10–11 is the new finding.
@@ -206,21 +211,27 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 
 ### Step 9 — Count the errors in each set of answers
 - [ ] **Who:** Claude writes it; Gemechu runs one short cell (no GPU). **Needs:** step 4. **Time:** 15 minutes.
-- **Do:** for each set of new answers (Qwen2.5-0.5B, Qwen2.5-1.5B, SmolLM2-1.7B, Qwen2.5-7B, Mistral-7B) report the
-  share of answers with at least one word the teacher marks, the share of marked words, and the average answer length.
-  Do the same for RAGTruth's six answering models using people's marks.
+- **Do:** run the step 9 cell of `plan.ipynb` (`python run.py density`; no GPU, a few minutes). For each set of new
+  answers (Qwen2.5-0.5B, Qwen2.5-1.5B, SmolLM2-1.7B, Qwen2.5-7B, Mistral-7B) it reports the share of answers with at
+  least one error the teacher marks, the share of marked characters, and the average answer length; the same for
+  RAGTruth's six answering models, marked by people and by the teacher.
 - **Output:** `results/density.md`. **Done when:** the table exists.
-- **Decision:** if small models' answers clearly hold more marked words, steps 10 and 11 test whether that is the reason.
+- **Decision (1 November):** test A showed no clear difference, so the counts are reported as a description; step 10
+  is dropped and step 11 is optional.
 
-### Step 10 — Same number of errors, different answer writers
-- [ ] **Who:** Claude writes the selection; Gemechu runs. **Needs:** step 9. **Time:** about 1.5 GPU hours.
+### Step 10 — Same number of errors, different answer writers (dropped)
+- **Dropped on 1 November** (agreed by Gemechu): test A showed no clear difference between small-model and 7B
+  answers (S4 not met), so there is no gap to explain. The original plan is kept below for the record.
+- **Who:** Claude writes the selection; Gemechu runs. **Needs:** step 9. **Time:** about 1.5 GPU hours.
 - **Do:** build a small-model set and a 7B set with the same number of answers (4,509) **and** the same share of
   answers with marked errors (chosen from the counts in step 9). Train a 17M student on each, 3 seeds each.
 - **Output:** runs `kdeqsmall17m(-s2,-s3)` and `kdeqlarge17m(-s2,-s3)`. **Done when:** in `summary.md`.
 - **Reading the result:** if the gap disappears, "more mistakes to learn from" is the reason. If it stays, small
   models make a different kind of mistake; then compare by RAGTruth error type.
 
-### Step 11 — Pick training answers on purpose (mistake-rich sets)
+### Step 11 — Pick training answers on purpose (mistake-rich sets) (optional)
+- **Optional since 1 November:** only if GPU time is left at the end. 17M runs vary by ± 3.8 points between seeds,
+  so a 1-point gain would be hard to see.
 - [ ] **Who:** Claude writes the selection; Gemechu runs. **Needs:** step 9. **Time:** 1.5 GPU hours (+1.2 at 68M).
 - **Do:** from the small-model answers, pick 4,509 so that about half contain a teacher-marked error. Compare with
   4,509 taken as they come (`kd17m-n4509`). 17M, 3 seeds. If it wins by ≥ 1 point on PsiloQA in all three runs,
@@ -239,7 +250,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 ## Phase D — Size and speed (week 2)
 
 ### Step 13 — 8-bit files and their accuracy
-- [ ] **Who:** Gemechu runs; Claude adds PsiloQA scoring for 8-bit files. **Needs:** step 8. **Time:** about 1 hour.
+- [x] **Who:** Gemechu runs; Claude adds PsiloQA scoring for 8-bit files. **Needs:** step 8. **Time:** about 1 hour.
 - **Do:** run the step 13 cell of `plan.ipynb` on a CPU runtime (no GPU needed, about 2 hours): `export` and
   `check8bit --n 2700 --psilo` for `kd17m` and `kd68m` (all RAGTruth test answers and the PsiloQA answers).
 - **Output:** `results/kd*_int8_n2700.json` and `kd*_int8_psilo.json` with the change in span F1 and its interval;
@@ -247,9 +258,30 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Done when:** the change is known for both models (S5: ≤ 1 point).
 
 ### Step 14 — Time and memory on a laptop CPU
-- [ ] **Who:** Gemechu (laptop), or Colab's CPU as a fallback. **Needs:** step 13. **Time:** 30 minutes.
-- **Do:** `bench --name kd68m --where laptop --threads 1 2` (and `kd17m`); write down the CPU model.
+- [x] **Who:** Gemechu (laptop), or Colab's CPU as a fallback. **Needs:** step 13. **Time:** about 1 hour, most of it installing.
+- **Do:** on the laptop, in PowerShell, in `C:\Users\cprfa\Documents\newpaper\ondevice_hallu`:
+  1. once: `python -m pip install -r requirements.txt`;
+  2. download the folders `work/models/kd68m` and `work/models/kd17m` from Drive into `work\models\`;
+  3. `python run.py bench --name kd68m --model work\models\kd68m --threads 1 2 --where laptop --data-dir ..\RAGTruth --work-dir work`,
+     then the same with `kd17m`. The CPU name, memory and Windows version are recorded with the times.
+  Fallback: the step 14 cell of `plan.ipynb` on a Colab CPU runtime.
 - **Output:** median and 90th-percentile time per answer, memory added, file size. **Done when:** in the status log.
+
+### Step 14b — A faster 68M without new training (added 1 November, exploratory)
+- [ ] **Who:** Claude wrote the code; Gemechu runs. **Needs:** step 14. **Time:** about 4 hours on a Colab CPU runtime
+  (accuracy) and 1 hour on the laptop (speed).
+- **Why:** on one laptop core the 8-bit 68M needs 1.66 s per answer; the target was 1 s.
+- **Do:** three variants of the 8-bit `kd68m`: (a) the `mix` recipe, which computes in 8 bits in the layers where
+  that is safe; (b) inputs cut to 1,024 tokens (the passages are shortened, the answer is kept); (c) both.
+  Accuracy: the step 14b cell of `plan.ipynb` on a Colab CPU runtime. Speed: on the laptop, in the `odh` environment,
+  in `C:\Users\cprfa\Documents\newpaper\ondevice_hallu`:
+  `python run.py bench --name kd68m --model work\models\kd68m --recipe mix --threads 1 2 --where laptop --data-dir ..\RAGTruth --work-dir work`,
+  then the same with `--max-length 1024` instead of `--recipe mix`, then with both.
+- **Rule:** these variants were chosen after seeing step 14, so they are reported as exploratory; S5 stays judged on
+  the planned 8-bit file.
+- **Output:** `results/kd68m_int8_mix_n2700.json`, `kd68m_int8_mix_psilo.json`, `kd68m_int8_len1024_n2700.json`,
+  `kd68m_int8_mix_len1024_n2700.json`; on the laptop `work\results\kd68m_bench_laptop_mix.json`, `..._len1024.json`,
+  `..._mix_len1024.json`. **Done when:** accuracy and speed are known for all three.
 
 ### Step 15 — Time and memory on an Android phone (optional)
 - [ ] **Who:** Gemechu with a borrowed mid-range phone; Claude writes the instructions. **Needs:** step 13. **Time:** half a day.
@@ -351,3 +383,7 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 30 Oct | 7 | 4 runs: seeds 2 and 3 of `kd17m-n4509`, `kdlarge17m` | `results/summary.md` |
 | 31 Oct | 8 | S1 not met (68M PsiloQA: +0.94 [0.64, 1.24] but one run −0.19); S2 met on RAGTruth and PsiloQA, pilot to come; S3 met (95.4%, 100.2%); S4 not met (17M +0.97 [0.53, 1.37] for small-model answers, one run −0.56). 17M runs vary ± 3.8 points | `results/summary.md` |
 | 31 Oct | 12 | Chat models as the checker, 300 test answers: Qwen2.5-0.5B 5.4, 1.5B 3.5, 7B 11.1; on the same answers our `kd68m` 59.7, `kd17m` 42.8, the teacher 63.0 | `results/llmlabel_selfcheck*_test.json` |
+| 31 Oct | 13 | 8-bit (w8) on all test answers: `kd68m` 261.4 → 73.9 MB, RAGTruth 56.02 → 55.99 (−0.03 [−0.16, 0.09]), PsiloQA 70.64 → 70.64 (0.00); `kd17m` 64.5 → 18.3 MB, RAGTruth −0.22 [−0.53, 0.07], PsiloQA −0.93 [−1.07, −0.80]. On Colab's CPU, `kd68m` took 1.9 s per RAGTruth answer on average | `results/kd*_int8_n2700.json`, `kd*_int8_psilo.json`, `kd*_export.json` |
+| 1 Nov | 14 | Laptop: Intel i7-1185G7 (4 cores), 16 GB, Windows 11, ONNX Runtime 1.29; 300 test answers, 772 tokens on average. `kd68m` 8-bit: median 1.66 s on 1 thread (90th percentile 3.72 s), 1.03 s on 2; full precision 1.20 / 0.99 s; memory added 726 MB (8-bit), 905 MB (full). `kd17m` 8-bit: 0.15 s (90th percentile 0.38 s), 0.11 s on 2; 386 MB. S5 time not met for 68M | `work\results\kd*_bench_laptop.json` on the laptop |
+| 1 Nov | 10, 11 | Step 10 dropped and step 11 made optional (agreed by Gemechu): test A showed no clear difference | `PLAN.md`, `EVALUATION.md` |
+| 1 Nov | 14b | Speed tests added after step 14, as exploratory: `mix` 8-bit recipe and inputs cut to 1,024 tokens; code for them and for step 9 (`density`) written | `run.py`, `colab/plan.ipynb` |

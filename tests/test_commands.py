@@ -171,5 +171,23 @@ class Averages(unittest.TestCase):
         self.assertEqual(answer_f1(flag_all, TEST), 66.67)                        # precision 1/2, recall 1
 
 
+class Variants(unittest.TestCase):
+    def test_other_8bit_settings_never_replace_the_planned_results(self):
+        def args(recipe, length):
+            return type('Args', (), {'recipe': recipe, 'max_length': length})
+        self.assertEqual(run.variant(args('w8', 4096)), '')
+        self.assertEqual(run.variant(args('mix', 4096)), '_mix')
+        self.assertEqual(run.variant(args('w8', 1024)), '_len1024')
+        self.assertEqual(run.variant(args('mix', 1024)), '_mix_len1024')
+        self.assertEqual(run.variant(args('mix', 1024), length=False), '_mix')     # the files: length does not matter
+
+
+class ErrorCounts(unittest.TestCase):
+    def test_share_of_answers_with_errors_marked_characters_and_length(self):
+        answers = [{'answer': 'aa bb cc dd'}, {'answer': 'ee ff'}]
+        self.assertEqual(run.error_counts(answers, [[(0, 2)], []]),
+                         {'answers': 2, 'with_errors_pct': 50.0, 'marked_chars_pct': 12.5, 'words_per_answer': 3.0})
+
+
 if __name__ == '__main__':
     unittest.main()
