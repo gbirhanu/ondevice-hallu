@@ -1079,7 +1079,7 @@ def cmd_density(args, p):
         return '' if b is None else (f'{b:g}B' if b >= 1 else f'{1000 * b:g}M')
 
     rows = []
-    for g in args.generators or extra_sets(p):
+    for g in sorted(args.generators or extra_sets(p), key=lambda g: (psilo.model_size(g) or 1e9, g)):
         path = os.path.join(p['preds'], f'{teacher}_extra_{g}.json.gz')
         extra, _ = distill.load_extra(os.path.join(p['extra'], g), g, sources)
         if not extra or not os.path.exists(path):

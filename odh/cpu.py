@@ -133,9 +133,17 @@ def _embeddings_8bit(model):
     return model
 
 
+def _quiet():
+    """onnxruntime's quantizers log one line per graph node (thousands); keep only warnings and errors."""
+    import logging
+    for name in ('', 'onnxruntime.quantization.matmul_nbits_quantizer'):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def _weights_8bit_float_sums(model, nodes):
     """8-bit weights in blocks of 32 (onnxruntime MatMulNBits); arithmetic in float."""
     from onnxruntime.quantization.matmul_nbits_quantizer import MatMulNBitsQuantizer
+    _quiet()
     nodes = set(nodes)
     if not nodes:
         return model
@@ -151,6 +159,7 @@ def quantize(fp32_path, int8_path, recipe='w8', calib=None):
     a few answers as lists of token ids, used only to find the layers with extreme inputs."""
     import onnx
     from onnxruntime.quantization import QuantType, quantize_dynamic
+    _quiet()
     if recipe == 'dyn':
         quantize_dynamic(fp32_path, int8_path, weight_type=QuantType.QInt8)
         return {'recipe': recipe}
@@ -166,8 +175,11 @@ def quantize(fp32_path, int8_path, recipe='w8', calib=None):
     model = _weights_8bit_float_sums(model, slow)
     fast = [n for n in layers if n not in set(slow)]
     if fast:
+        # Layers after a MatMulNBits layer (an onnxruntime-only operator) get no data type from ONNX's shape
+        # inference; all of them are float, so say so (onnxruntime then quantizes them as usual).
         quantize_dynamic(model, int8_path, op_types_to_quantize=['MatMul'], nodes_to_quantize=fast,
-                         per_channel=True, weight_type=QuantType.QInt8)
+                         per_channel=True, weight_type=QuantType.QInt8,
+                         extra_options={'DefaultTensorType': onnx.TensorProto.FLOAT})
         model = onnx.load(int8_path)
     onnx.save(_embeddings_8bit(model), int8_path)
     return {'recipe': recipe, 'layers': len(layers), 'layers_with_8bit_arithmetic': len(fast),

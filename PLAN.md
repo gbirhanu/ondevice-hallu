@@ -35,6 +35,8 @@ PsiloQA: 4,000 English answers, GPT-4o labels, never used for training. All numb
   6× larger teacher on RAGTruth and ties with it on PsiloQA (+0.15, no clear difference).
 - Test A: who writes the new answers makes no clear difference. At 17M, small-model answers give +0.97 on
   PsiloQA on average, but one of three runs went the other way; at 68M (one run) +0.29. The earlier +2.5 was one run.
+- Small models' answers hold more errors: 52–61% of them have an error the teacher marks (8–12% of their
+  characters), against 36–39% (3–4%) for the 7B models' answers. Even so, they did not teach clearly better.
 - Test B: a free 7B chat model is a poor labeller (11.1 span F1 against people, our teacher 63.0).
 - Phone-sized chat models cannot check answers: 3.5–5.4 span F1, against 59.7 for our 68M checker on the same
   300 answers. A separate small checker is needed.
@@ -210,7 +212,7 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 ## Phase C — Why do small models' answers teach better? (weeks 1–2)
 
 ### Step 9 — Count the errors in each set of answers
-- [ ] **Who:** Claude writes it; Gemechu runs one short cell (no GPU). **Needs:** step 4. **Time:** 15 minutes.
+- [x] **Who:** Claude writes it; Gemechu runs one short cell (no GPU). **Needs:** step 4. **Time:** 15 minutes.
 - **Do:** run the step 9 cell of `plan.ipynb` (`python run.py density`; no GPU, a few minutes). For each set of new
   answers (Qwen2.5-0.5B, Qwen2.5-1.5B, SmolLM2-1.7B, Qwen2.5-7B, Mistral-7B) it reports the share of answers with at
   least one error the teacher marks, the share of marked characters, and the average answer length; the same for
@@ -387,3 +389,5 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 1 Nov | 14 | Laptop: Intel i7-1185G7 (4 cores), 16 GB, Windows 11, ONNX Runtime 1.29; 300 test answers, 772 tokens on average. `kd68m` 8-bit: median 1.66 s on 1 thread (90th percentile 3.72 s), 1.03 s on 2; full precision 1.20 / 0.99 s; memory added 726 MB (8-bit), 905 MB (full). `kd17m` 8-bit: 0.15 s (90th percentile 0.38 s), 0.11 s on 2; 386 MB. S5 time not met for 68M | `work\results\kd*_bench_laptop.json` on the laptop |
 | 1 Nov | 10, 11 | Step 10 dropped and step 11 made optional (agreed by Gemechu): test A showed no clear difference | `PLAN.md`, `EVALUATION.md` |
 | 1 Nov | 14b | Speed tests added after step 14, as exploratory: `mix` 8-bit recipe and inputs cut to 1,024 tokens; code for them and for step 9 (`density`) written | `run.py`, `colab/plan.ipynb` |
+| 1 Nov | 9 | Teacher-marked errors in the new answers: Qwen2.5-0.5B 51.7% of answers (12.3% of characters), Qwen2.5-1.5B 61.0% (8.1%), SmolLM2-1.7B 57.1% (9.0%), Qwen2.5-7B 35.9% (3.2%), Mistral-7B 38.5% (3.7%). On RAGTruth's training answers the teacher's counts are close to people's (it was trained on them) | `results/density.md` |
+| 2 Nov | 14b | The `mix` recipe stopped with an error on the real 68M ("Unable to find data type"): after a layer kept in the slower 8-bit form, ONNX could not tell the data type of the next layers. Fixed (they are float) and tested; quantizer logs made quiet. Laptop, inputs cut to 1,024 tokens (planned recipe): median 1.23 s on 1 thread, 0.99 s on 2, 90th percentile 1.99 s, memory added 283 MB (726 MB with full inputs). To run again: the `mix` timings and the step 14b cell on Colab | `work\results\kd68m_bench_laptop_len1024.json` on the laptop |

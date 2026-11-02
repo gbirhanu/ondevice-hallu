@@ -135,5 +135,42 @@ class Embeddings8bit(unittest.TestCase):
         self.assertLess(np.abs(got - table[ids]).max(), np.abs(table).max() / 127)
 
 
+class MixRecipe(unittest.TestCase):
+    def test_layers_after_a_kept_layer_still_get_8bit_arithmetic(self):
+        # As in kd68m exported with transformers 4.57: a layer kept as MatMulNBits feeds a layer that gets
+        # 8-bit arithmetic; ONNX cannot tell that layer's data type, which once stopped the "mix" recipe.
+        import numpy as np
+        import onnx
+        import onnxruntime as ort
+        from onnx import TensorProto, helper, numpy_helper
+        rng = np.random.default_rng(0)
+        w1, w2 = (rng.normal(size=(64, 64)).astype(np.float32) for _ in range(2))
+        graph = helper.make_graph(
+            [helper.make_node('MatMul', ['x', 'w1'], ['h'], name='/layer1/MatMul'),
+             helper.make_node('Relu', ['h'], ['r'], name='/act'),
+             helper.make_node('MatMul', ['r', 'w2'], ['z'], name='/layer2/MatMul'),
+             helper.make_node('Relu', ['z'], ['y'], name='/act2')], 'g',      # layer 2's output is not a graph output
+            [helper.make_tensor_value_info('x', TensorProto.FLOAT, ['b', 64])],
+            [helper.make_tensor_value_info('y', TensorProto.FLOAT, ['b', 64])],
+            [numpy_helper.from_array(w1, 'w1'), numpy_helper.from_array(w2, 'w2')])
+        tmp = ROOT / 'work_test' / ('mix-' + uuid.uuid4().hex)
+        tmp.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fp32, int8 = str(tmp / 'fp32.onnx'), str(tmp / 'int8.onnx')
+        onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid('', 17)], ir_version=8), fp32)
+        real = cpu.input_ranges
+        cpu.input_ranges = lambda path, encoded: {'/layer1/MatMul': 9.0, '/layer2/MatMul': 0.0}   # layer 1 is "extreme"
+        self.addCleanup(setattr, cpu, 'input_ranges', real)
+        made = cpu.quantize(fp32, int8, 'mix', calib=[[1, 2, 3]])
+        self.assertEqual(made['layers_with_8bit_arithmetic'], 1)
+        ops = {n.op_type for n in onnx.load(int8).graph.node}
+        self.assertIn('MatMulNBits', ops)
+        self.assertIn('MatMulInteger', ops)
+        x = rng.normal(size=(4, 64)).astype(np.float32)
+        want = ort.InferenceSession(fp32, providers=['CPUExecutionProvider']).run(None, {'x': x})[0]
+        got = ort.InferenceSession(int8, providers=['CPUExecutionProvider']).run(None, {'x': x})[0]
+        self.assertLess(np.abs(got - want).max() / np.abs(want).max(), 0.05)
+
+
 if __name__ == '__main__':
     unittest.main()
