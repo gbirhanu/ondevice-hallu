@@ -21,6 +21,7 @@
     python run.py train  --name kd17m-s2 --seed 2 ...   # kd17m again with seed 2 (same recipe, checked)
     python run.py summary                         # mean and spread over seeds; differences that count
     python run.py density                         # how many errors each set of answers holds (no GPU)
+    python run.py lrpick --names kd17m kd17m-lr5e5 kd17m-lr1e4   # keep 2e-5 or another learning rate (dev set)
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -782,7 +783,7 @@ def cmd_psilo(args, p):
         with gzip.open(psilo_gold_path(p), 'wt', encoding='utf-8') as fh:
             json.dump(gold, fh)
     trained = [f[:-len('_training.json')] for f in sorted(os.listdir(p['results'])) if f.endswith('_training.json')]
-    names = args.names or [n for n in ['tiny17m', 'tiny68m', 'ld_base', 'ld_large'] + trained
+    names = args.names or [n for n in ['tiny17m', 'tiny32m', 'tiny68m', 'ld_base', 'ld_large'] + trained
                            if os.path.exists(os.path.join(p['preds'], f'{n}_test.json.gz'))]
     for name in names:
         out = os.path.join(p['preds'], f'{name}_psilo.json.gz')
@@ -1054,6 +1055,82 @@ def cmd_summary(args, p):
     print(md)
 
 
+LR_MARGIN = 2.0     # dev points another learning rate must gain before it replaces the first run's
+
+
+def pick_lr(records, margin=LR_MARGIN):
+    """Which learning rate one student keeps (rule of 13 November 2026, EVALUATION.md section 9).
+    `records` are training records of the same student trained with different learning rates and the
+    same seed; the first one is the recipe in use (2e-5). Only the dev set is looked at (rule R1): the
+    span F1 at 0.5 of each run's best epoch. The first run stays unless the best other run is at least
+    `margin` points better; then that run is chosen (of equal runs, the one listed first)."""
+    first = records[0]
+    if len(records) < 2:
+        raise SystemExit('lrpick needs at least two runs: the one in use first, then the other learning rates.')
+    for r in records[1:]:
+        changed = [f'{k}: {first[k]} -> {r[k]}' for k in RECIPE
+                   if k != 'lr' and k in first and k in r and first[k] != r[k]]
+        if r.get('seed', 42) != first.get('seed', 42):
+            changed.append(f'seed: {first.get("seed", 42)} -> {r.get("seed", 42)}')
+        if changed:
+            raise SystemExit(f'{r["name"]} differs from {first["name"]} in more than the learning rate: '
+                             + '; '.join(changed))
+    if len({r['lr'] for r in records}) < len(records):
+        raise SystemExit('Two of these runs have the same learning rate.')
+    best = max(records[1:], key=lambda r: r['dev_f1_05'])
+    gain = round(best['dev_f1_05'] - first['dev_f1_05'], 2)
+    chosen = best if gain >= margin else first
+    return {'in_use': first['name'], 'margin': margin, 'best_other': best['name'], 'gain_of_best_other': gain,
+            'changed': chosen is best, 'chosen': chosen['name'], 'chosen_lr': chosen['lr'],
+            'runs': [{k: r.get(k) for k in ('name', 'lr', 'seed', 'epochs', 'best_epoch', 'dev_f1_05',
+                                            'dev_cutoff', 'dev_f1_at_cutoff')} for r in records]}
+
+
+def cmd_lrpick(args, p):
+    """Fixes the learning rate of one student from its dev results (pick_lr). --names: the run in use
+    first, then the runs with other learning rates. Writes results/lrpick_<first run>.json and .md.
+    A choice that is saved is never changed silently: other runs need --redo."""
+    if not args.names:
+        raise SystemExit('lrpick needs --names: the run in use first, then the runs with other learning rates.')
+    out = os.path.join(p['results'], f'lrpick_{args.names[0]}.json')
+    if os.path.exists(out) and not args.redo:
+        rec = read_json(out)
+        if [r['name'] for r in rec['runs']] != args.names:
+            raise SystemExit(f'{out} holds a choice among other runs ({", ".join(r["name"] for r in rec["runs"])}); '
+                             'add --redo to choose again.')
+        print(f'Already chosen: {out} (add --redo to repeat).')
+    else:
+        records = []
+        for n in args.names:
+            path = os.path.join(p['results'], f'{n}_training.json')
+            if not os.path.exists(path):
+                raise SystemExit(f'{n} has not been trained yet.')
+            records.append({'name': n, **read_json(path)})
+        rec = pick_lr(records)
+        write_json(out, rec)
+    lines = ['| Run | Learning rate | Epochs | Best epoch | Dev span F1 at 0.5 | Minus the run in use | |',
+             '|---|---|---|---|---|---|---|']
+    base = rec['runs'][0]['dev_f1_05']
+    for r in rec['runs']:
+        lines.append(f'| {r["name"]} | {r["lr"]:g} | {r["epochs"]} | {r["best_epoch"]} | {r["dev_f1_05"]:.2f} | '
+                     + ('in use' if r['name'] == rec['in_use'] else f'{r["dev_f1_05"] - base:+.2f}')
+                     + f' | {"**chosen**" if r["name"] == rec["chosen"] else ""} |')
+    lines.append('')
+    if rec['changed']:
+        lines.append(f'**{rec["chosen"]}** (learning rate {rec["chosen_lr"]:g}) is chosen: it is '
+                     f'{rec["gain_of_best_other"]:+.2f} dev points against {rec["in_use"]}, at least the '
+                     f'{rec["margin"]:g} points the rule asks for.')
+    else:
+        lines.append(f'**{rec["in_use"]}** stays (learning rate {rec["chosen_lr"]:g}): the best other run, '
+                     f'{rec["best_other"]}, is {rec["gain_of_best_other"]:+.2f} dev points, less than the '
+                     f'{rec["margin"]:g} points the rule asks for.')
+    lines.append('Dev set only (1,506 RAGTruth dev answers); no test set was looked at.')
+    md = '\n'.join(lines)
+    with open(out[:-5] + '.md', 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
+
+
 def error_counts(answers, spans):
     """How many errors a set of answers holds: share of answers with at least one marked span, share of
     marked characters, and words per answer."""
@@ -1267,7 +1344,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
                                      'signals', 'fusion', 'teach', 'generate', 'distill', 'llmlabel', 'psilo',
-                                     'compare', 'summary', 'density'])
+                                     'compare', 'summary', 'density', 'lrpick'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -1302,7 +1379,8 @@ def main():
     ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
     ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
     ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones); '
-                    'llmlabel --on test: checkers scored on the same answers; summary: runs to show, without -s2/-s3')
+                    'llmlabel --on test: checkers scored on the same answers; summary: runs to show, without -s2/-s3; '
+                    'lrpick: the run in use first, then the runs with other learning rates')
     ap.add_argument('--extra-teacher', help='train: who labels the new answers (default: --teacher), e.g. gpt4o')
     ap.add_argument('--extra-hard', action='store_true', help='train: round the labels of the new answers to 0 or 1')
     ap.add_argument('--extra-max', type=int, help='train: use at most this many new answers (same share per model)')
@@ -1322,7 +1400,7 @@ def main():
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
     if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare',
-                         'summary', 'density') \
+                         'summary', 'density', 'lrpick') \
             and not args.name:
         ap.error('--name is required')
     if args.step in ('signals', 'generate') and not args.generator:
@@ -1345,7 +1423,7 @@ def main():
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
      'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill,
      'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare, 'summary': cmd_summary,
-     'density': cmd_density}[args.step](args, p)
+     'density': cmd_density, 'lrpick': cmd_lrpick}[args.step](args, p)
 
 
 if __name__ == '__main__':

@@ -154,6 +154,62 @@ class SeedRuns(unittest.TestCase):
             run.same_recipe_as_base(self.p, {**self.recipe, 'name': 'kd68m-s2', 'seed': 2})
 
 
+class LearningRate(unittest.TestCase):
+    def setUp(self):
+        self.work = ROOT / 'work_test' / ('l-' + uuid.uuid4().hex)
+        self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
+        self.p = run.paths(str(self.work))
+
+    def add(self, name, lr, dev, **other):
+        rec = {'name': name, 'base': 'jhu-clsp/ettin-encoder-17m', 'epochs': 5, 'lr': lr, 'seed': 42,
+               'teacher': 'ld_large', 'alpha': 0.5, 'train_answers': 13584, 'best_epoch': 5, 'dev_f1_05': dev,
+               'dev_cutoff': 0.3, 'dev_f1_at_cutoff': dev + 2, **other}
+        (Path(self.p['results']) / f'{name}_training.json').write_text(json.dumps(rec))
+        return rec
+
+    def test_the_run_in_use_stays_unless_another_learning_rate_gains_two_dev_points(self):
+        a, b, c = self.add('kd17m', 2e-5, 40.89), self.add('kd17m-lr5e5', 5e-5, 42.88), self.add('kd17m-lr1e4', 1e-4, 41.0)
+        rec = run.pick_lr([a, b, c])
+        self.assertEqual((rec['chosen'], rec['changed'], rec['gain_of_best_other']), ('kd17m', False, 1.99))
+        d = self.add('kd17m-lr2e4', 2e-4, 46.5)
+        rec = run.pick_lr([a, b, c, d])
+        self.assertEqual((rec['chosen'], rec['chosen_lr'], rec['changed']), ('kd17m-lr2e4', 2e-4, True))
+        self.assertEqual([r['name'] for r in rec['runs']], ['kd17m', 'kd17m-lr5e5', 'kd17m-lr1e4', 'kd17m-lr2e4'])
+        exactly = self.add('kd17m-lr3e4', 3e-4, 42.89)
+        self.assertEqual(run.pick_lr([a, exactly])['chosen'], 'kd17m-lr3e4')           # exactly 2.00 points: chosen
+
+    def test_only_the_learning_rate_may_differ(self):
+        a = self.add('kd17m', 2e-5, 40.0)
+        with self.assertRaisesRegex(SystemExit, 'epochs: 5 -> 8'):
+            run.pick_lr([a, self.add('kd17m-lr1e4', 1e-4, 50.0, epochs=8)])
+        with self.assertRaisesRegex(SystemExit, 'seed: 42 -> 2'):
+            run.pick_lr([a, self.add('kd17m-lr1e4', 1e-4, 50.0, seed=2)])
+        with self.assertRaisesRegex(SystemExit, 'same learning rate'):
+            run.pick_lr([a, self.add('kd17m-again', 2e-5, 50.0)])
+        with self.assertRaisesRegex(SystemExit, 'at least two runs'):
+            run.pick_lr([a])
+        old = {k: v for k, v in a.items() if k != 'alpha'}                              # an older record: fewer fields
+        self.assertEqual(run.pick_lr([old, self.add('kd17m-lr1e4', 1e-4, 50.0)])['chosen'], 'kd17m-lr1e4')
+
+    def test_a_saved_choice_is_kept(self):
+        import argparse
+        self.add('kd17m', 2e-5, 40.0)
+        self.add('kd17m-lr5e5', 5e-5, 45.0)
+        args = argparse.Namespace(names=['kd17m', 'kd17m-lr5e5'], redo=False)
+        run.cmd_lrpick(args, self.p)
+        saved = Path(self.p['results']) / 'lrpick_kd17m.json'
+        self.assertEqual(json.loads(saved.read_text())['chosen'], 'kd17m-lr5e5')
+        self.assertIn('**chosen**', (Path(self.p['results']) / 'lrpick_kd17m.md').read_text())
+        self.add('kd17m-lr5e5', 5e-5, 30.0)                      # even if a file changes later, the choice stays
+        run.cmd_lrpick(args, self.p)
+        self.assertEqual(json.loads(saved.read_text())['chosen'], 'kd17m-lr5e5')
+        self.add('kd17m-lr1e4', 1e-4, 60.0)
+        with self.assertRaisesRegex(SystemExit, 'add --redo'):
+            run.cmd_lrpick(argparse.Namespace(names=['kd17m', 'kd17m-lr5e5', 'kd17m-lr1e4'], redo=False), self.p)
+        with self.assertRaisesRegex(SystemExit, 'has not been trained'):
+            run.cmd_lrpick(argparse.Namespace(names=['hard17m-8ep', 'hard17m-8ep-lr5e5'], redo=False), self.p)
+
+
 class Averages(unittest.TestCase):
     def test_one_run_gives_the_plain_interval_and_identical_runs_give_zero(self):
         from odh.metrics import bootstrap, bootstrap_mean

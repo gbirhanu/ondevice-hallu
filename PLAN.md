@@ -1,7 +1,7 @@
 # Experiment plan: a compact word-level hallucination checker for offline RAG
 
 **Period:** 20 October – 19 November 2026 (one month) · **People:** Gemechu Birhanu, one colleague, Claude (assistant)
-**Last updated:** 31 October 2026
+**Last updated:** 13 November 2026
 
 ## How to use this plan
 
@@ -45,6 +45,15 @@ PsiloQA: 4,000 English answers, GPT-4o labels, never used for training. All numb
 - On one laptop core (Intel i7-1185G7), the 8-bit 68M needs 1.66 s per answer (median; 1.03 s with 2 threads),
   over the 1 s target; the 17M needs 0.15 s. Our 8-bit file is not faster than full precision (1.20 s): it keeps
   the arithmetic in float, so it saves size and memory, not time.
+- The `mix` 8-bit recipe (8-bit arithmetic, tried for speed on 2 November) fails: 56.02 → 34.59 on RAGTruth
+  (−21.43 [−24.52, −18.21]). That line is closed. Speed must come from a smaller model or shorter inputs.
+- Of our 68M's +6.17 over TinyLettuce-68M, +4.14 comes from our training with people's labels alone
+  (`hard68m-8ep` 54.19 against 50.05) and +2.03 from the teacher and the new answers.
+- On PsiloQA every checker of 68M or more, the 396M teacher included, lies between 69.4 and 70.6, so that test set
+  has little room left to show a gain at 68M.
+- With learning rate 2e-5 the 17M students were still improving on the dev set at their last epoch (the best epoch
+  of `kd17m` was the last one in all three runs). Steps 8b and 8c (added 13 November) test other learning rates on
+  the dev set and add a 32M student.
 - Weak points: at 17M, TinyLettuce-17M is better on PsiloQA (−2.79; on answers by models up to 2B −3.79, in all
   runs); and 17M training varies a lot between runs (± 3.8 points on RAGTruth, against ± 0.4 at 68M).
 
@@ -102,6 +111,7 @@ S1, S2 and S5 are enough for a solid paper. S3 and S6 make it strong. S4 with st
 | 2 | 27 Oct – 2 Nov | 10, 11, 12, 13, 14, (15), 16, 17, 18 |
 | 3 | 3–9 Nov | 19, 20, start 21 and 22 |
 | 4 | 10–19 Nov | 21, 22, 23; the last days are kept free for re-runs |
+| added | 13–19 Nov | 8b, 8c, 8d, 8e (about 9 GPU hours and 1 CPU hour); 16–20 in parallel, since they need people, not the GPU |
 
 GPU time in total: about 16–18 hours. Use Colab and Kaggle's free weekly GPU hours side by side.
 
@@ -209,6 +219,54 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Decision:** if S1 fails at 68M, report 17M and the PsiloQA gains, and consider more new answers (after the month).
 - **Done when:** the status log says which criteria are met.
 
+## Phase B2 — A better 17M and a 32M student (added 13 November)
+
+These steps were added **after** the results of 31 October were seen (EVALUATION.md, section 9). Their results are
+reported as added later; S1–S4 stay judged on the runs with the original recipe. The rule for all of them was
+written down before any run: for each student, seed 42 is trained once per learning rate; only the dev span F1 at
+0.5 of the best epoch is compared (no test set is scored); the student keeps 2e-5 unless another value is at least
+2.0 dev points better; the chosen run is repeated with seeds 2 and 3. `run.py lrpick` applies the rule and saves the
+choice in `results/lrpick_<student>.json`.
+
+### Step 8b — The 17M students with other learning rates
+- [ ] **Who:** Gemechu on Colab (GPU). **Needs:** nothing. **Time:** about 1.7 GPU hours (part 1) + 1.1 (part 2).
+- **Why:** with 2e-5 the 17M students were still improving at their last epoch and vary by ± 3.8 points between runs.
+- **Do:** in `colab/plan.ipynb`, run the two setup cells, then the cell "Step 8b, part 1": `hard17m-8ep` and `kd17m`,
+  seed 42, with learning rates 5e-5, 1e-4 and 2e-4 (6 runs; run names end in `-lr5e5`, `-lr1e4`, `-lr2e4`). It ends
+  with two small tables that say which learning rate each student keeps. Then run "Step 8b, part 2": the chosen runs
+  with seeds 2 and 3 (nothing is trained if both students keep 2e-5).
+- **Output:** `results/lrpick_hard17m-8ep.json`, `lrpick_kd17m.json` (and `.md`); up to 4 new scored runs.
+- **Done when:** both choices are saved and the chosen runs have three seeds.
+
+### Step 8c — A 32M student
+- [ ] **Who:** Gemechu on Colab (GPU). **Needs:** nothing. **Time:** about 3.5 GPU hours (part 1) + 2.5 (part 2);
+  an estimate, the first run shows the real time. Each part can be spread over two sessions.
+- **Why:** the 68M needs 1.66 s per answer on one laptop core and the 17M is weak; the 32M lies between them.
+- **Do:** the cell "Step 8c, part 1": `hard32m-8ep` (8 epochs) and `kd32m` (5 epochs, the teacher, the same 6,719 new
+  answers), seed 42, with learning rates 2e-5, 5e-5 and 1e-4 (6 runs), then the choice. Then "Step 8c, part 2": the
+  chosen runs with seeds 2 and 3 (4 runs).
+- **Output:** `results/lrpick_hard32m-8ep.json`, `lrpick_kd32m.json`; 6 scored runs. About 0.7 GB more on Drive.
+- **Done when:** both chosen 32M students have three scored runs.
+
+### Step 8d — Tables for the added runs
+- [ ] **Who:** Gemechu runs the cell; Claude reads the table. **Needs:** step 8b or 8c. **Time:** 10–20 minutes (GPU).
+- **Do:** the cell "Step 8d". It scores the new runs (and the published TinyLettuce-32M) on PsiloQA and writes
+  `results/summary_added.md`: what the teacher adds at 17M and 32M, our 17M and 32M against TinyLettuce 17M / 32M / 68M,
+  what the new learning rate changed, and `kd68m` against the published 150M `ld_base`. `summary.md` is not touched.
+  Run it after 8b and again after 8c. Then tell Claude "step 8d done".
+- **Done when:** the status log says what the added runs show.
+
+### Step 8e — 8-bit files, size and speed of the new students
+- [ ] **Who:** Gemechu (Colab CPU runtime, then the laptop). **Needs:** step 8d. **Time:** about 1 hour + 30 minutes.
+- **Do:** on a **CPU** runtime, the cell "Step 8e": the 8-bit file of the chosen `kd32m` run (and of the chosen
+  `kd17m` run if its learning rate changed), its accuracy on all RAGTruth test answers and on PsiloQA, and the time
+  per answer on Colab's CPU. Then on the laptop, as in step 14: download the folder of the chosen run (its name is in
+  the table of step 8c, for example `kd32m` or `kd32m-lr5e5`) from `work/models/` on Drive into `work\models\`, and run
+  `python run.py bench --name <run> --model work\models\<run> --threads 1 2 --where laptop --data-dir ..\RAGTruth --work-dir work`.
+- **Output:** `results/<run>_export.json`, `<run>_int8_n2700.json`, `<run>_int8_psilo.json`, `<run>_bench_colab.json`;
+  on the laptop `work\results\<run>_bench_laptop.json`.
+- **Done when:** size, 8-bit cost and laptop time of the 32M are in the status log.
+
 ## Phase C — Why do small models' answers teach better? (weeks 1–2)
 
 ### Step 9 — Count the errors in each set of answers
@@ -270,6 +328,9 @@ All 17 papers with a DOI in one click: [import into Zotero](https://literature.r
 - **Output:** median and 90th-percentile time per answer, memory added, file size. **Done when:** in the status log.
 
 ### Step 14b — A faster 68M without new training (added 1 November, exploratory)
+- **13 November:** variant (a), the `mix` recipe, fails (−21.43 points on RAGTruth) and is closed; variant (c), which
+  uses it, is dropped. Only the accuracy of variant (b), inputs cut to 1,024 tokens, is still to be measured: the
+  step 14b cell of `plan.ipynb` now runs only that (CPU runtime, about 1.5 hours). Its laptop time is known (1.23 s).
 - [ ] **Who:** Claude wrote the code; Gemechu runs. **Needs:** step 14. **Time:** about 4 hours on a Colab CPU runtime
   (accuracy) and 1 hour on the laptop (speed).
 - **Why:** on one laptop core the 8-bit 68M needs 1.66 s per answer; the target was 1 s.
@@ -360,13 +421,15 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 - **Run names:** people's labels only `hard17m`, `hard17m-8ep`, `hard68m-8ep`; teacher's marks on RAGTruth only
   `soft17m`; distilled `kd17m`, `kd68m`; test A `kd17m-n4509` vs `kdlarge17m` (and the 68M pair); test B `kdhard17m`
   vs `llm17m`; seeds add `-s2`, `-s3`; steps 10 and 11 use `kdeq*` and `kdrich*`.
+  Added 13 November: another learning rate adds `-lr5e5`, `-lr1e4` or `-lr2e4` before the seed (`kd17m-lr1e4-s2`);
+  the 32M students are `hard32m-8ep` and `kd32m`; the chosen runs are in `results/lrpick_<student>.json`.
 - **Models:** teacher `ld_large` = KRLabsOrg/lettucedect-large-modernbert-en-v1; students start from
   jhu-clsp/ettin-encoder-17m / -68m; new answers from Qwen2.5-0.5B/1.5B-Instruct and SmolLM2-1.7B-Instruct; 7B arm
   Qwen2.5-7B-Instruct and Mistral-7B-Instruct-v0.3 (4-bit).
 - **Scoring:** span F1 exactly as LettuceDetect, at 0.5 and at the dev cut-off; 95% intervals resample RAGTruth
   sources or PsiloQA Wikipedia articles; the dev set is 10% of the training sources.
 - **Commands:** `run.py` with `train`, `score`, `teach`, `generate`, `llmlabel`, `psilo`, `compare`, `export`,
-  `check8bit`, `bench` (and `summary` from step 4). Every command skips work whose result already exists.
+  `check8bit`, `bench`, `summary` (step 4), `density` (step 9) and `lrpick` (steps 8b, 8c). Every command skips work whose result already exists.
 - **Copying files to Gemechu's folder:** convert to Windows line endings, write through the device bridge, check the md5.
 
 # Status log
@@ -391,3 +454,5 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 1 Nov | 14b | Speed tests added after step 14, as exploratory: `mix` 8-bit recipe and inputs cut to 1,024 tokens; code for them and for step 9 (`density`) written | `run.py`, `colab/plan.ipynb` |
 | 1 Nov | 9 | Teacher-marked errors in the new answers: Qwen2.5-0.5B 51.7% of answers (12.3% of characters), Qwen2.5-1.5B 61.0% (8.1%), SmolLM2-1.7B 57.1% (9.0%), Qwen2.5-7B 35.9% (3.2%), Mistral-7B 38.5% (3.7%). On RAGTruth's training answers the teacher's counts are close to people's (it was trained on them) | `results/density.md` |
 | 2 Nov | 14b | The `mix` recipe stopped with an error on the real 68M ("Unable to find data type"): after a layer kept in the slower 8-bit form, ONNX could not tell the data type of the next layers. Fixed (they are float) and tested; quantizer logs made quiet. Laptop, inputs cut to 1,024 tokens (planned recipe): median 1.23 s on 1 thread, 0.99 s on 2, 90th percentile 1.99 s, memory added 283 MB (726 MB with full inputs). To run again: the `mix` timings and the step 14b cell on Colab | `work\results\kd68m_bench_laptop_len1024.json` on the laptop |
+| 2 Nov | 14b | Accuracy of the `mix` recipe on all 2,700 RAGTruth test answers: 56.02 → 34.59 (−21.43 [−24.52, −18.21]); the export check already showed 18% of word decisions flipped. `mix` fails; the cell stopped there, so variants (b) and (c) were not scored | `results/kd68m_int8_mix_n2700.json`, `kd68m_export_mix.json` |
+| 13 Nov | — | Review of the design and the results by Claude: one solid result (the 68M checker), S4 failed, S5 time not met, pilot set not started. `mix` and variant (c) closed. Steps 8b–8e added (other learning rates for 17M on the dev set, a 32M student, their tables, 8-bit and speed), with the rule written in EVALUATION.md section 9 before any run. Code: `lrpick` command, new cells in `plan.ipynb`, TinyLettuce-32M scored on PsiloQA; the 12 command tests pass (the tests that need PyTorch were not run by Claude: run `python -m pytest tests -q` on the laptop) | `EVALUATION.md`, `PLAN.md`, `run.py`, `colab/plan.ipynb` |
