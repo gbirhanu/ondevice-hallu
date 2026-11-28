@@ -1,7 +1,7 @@
 # Experiment plan: a compact word-level hallucination checker for offline RAG
 
 **Period:** 20 October – 19 November 2026 (one month) · **People:** Gemechu Birhanu, one colleague, Claude (assistant)
-**Last updated:** 26 November 2026
+**Last updated:** 28 November 2026
 
 ## How to use this plan
 
@@ -370,7 +370,12 @@ choice in `results/lrpick_<student>.json`.
 ## Phase E — A small test set from the real use (weeks 2–3)
 
 ### Step 16 — Documents and questions
-- [ ] **Who:** Gemechu and the colleague; Claude helps write questions. **Needs:** nothing. **Time:** 1 day.
+- **28 November:** done, with 67 questions instead of about 50, all kept after the review by Gemechu and the
+  colleague. Course: 16 passages written in plain words from the topics of the CoSc4035 Computer Security slides
+  (the slides contain textbook text, so none is copied; CC BY 4.0), 34 questions. Health: 10 excerpts copied word
+  for word from CDC pages (public domain), 33 questions. 51 questions are answered fully by their passage, 8 in part
+  and 8 not at all; the last two kinds check whether a model makes up an answer. Details: `pilot/README.md`.
+- [x] **Who:** Gemechu and the colleague; Claude helps write questions. **Needs:** nothing. **Time:** 1 day.
 - **Do:** pick documents whose licence allows sharing: your own lecture notes (for example Computer Architecture),
   since you hold the rights, or open textbooks; plus public health guidelines with an open licence. Write about 50
   questions (25 course, 25 health) that the documents can answer.
@@ -378,10 +383,14 @@ choice in `results/lrpick_<student>.json`.
 - **Done when:** 50 questions, each with its passage.
 
 ### Step 17 — Answers from phone-sized models
-- [ ] **Who:** Claude adapts `generate`; Gemechu runs. **Needs:** step 16. **Time:** 30 GPU minutes.
-- **Do:** Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-1.7B answer every question from its passage (same prompt style as
-  RAGTruth's questions). About 150 answers.
-- **Output:** `pilot/answers.jsonl`. **Done when:** every question has three answers.
+- [ ] **Who:** Claude wrote `run.py pilotgen` and the cell; Gemechu runs. **Needs:** step 16. **Time:** about 20–30 GPU minutes.
+- **Do:** Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-1.7B answer every question from its passage, with RAGTruth's
+  question-answering prompt (one passage instead of three, and RAGTruth's own sentence asking for "Unable to answer
+  based on given passages." when the passage does not answer). Sampling as for the new training answers; an answer
+  that stops at 450 tokens or is empty is written again with another seed (up to 3 tries). 201 answers. In
+  `colab/plan.ipynb`, on a T4 GPU: the two setup cells, then the cell "Step 17".
+- **Output:** `work/pilot/answers.jsonl` on Drive (Claude copies it into `pilot/answers.jsonl` with step 18) and
+  `results/pilot_answers.md`. **Done when:** every question has three answers.
 
 ### Step 18 — Annotation guide, tool and practice round
 - [ ] **Who:** Claude drafts the guide and builds a simple marking page; both annotators practise. **Needs:** step 17. **Time:** half a day.
@@ -390,8 +399,8 @@ choice in `results/lrpick_<student>.json`.
 - **Output:** `pilot/GUIDE.md` and the marking page. **Done when:** the practice round is discussed and the guide revised.
 
 ### Step 19 — Mark the answers and measure agreement
-- [ ] **Who:** Gemechu and the colleague, separately (about one day each); Claude computes agreement. **Needs:** step 18.
-- **Do:** each person marks all ~150 answers alone. Claude computes word-level Cohen's κ and span F1 between the two.
+- [ ] **Who:** Gemechu and the colleague, separately (about 1.5 days each); Claude computes agreement. **Needs:** step 18.
+- **Do:** each person marks all 201 answers alone. Claude computes word-level Cohen's κ and span F1 between the two.
   If κ < 0.6, discuss the disagreements and revise. Then agree one final marking per answer.
 - **Output:** `pilot/labels_a.jsonl`, `pilot/labels_b.jsonl`, `pilot/gold.jsonl`, `results/pilot_agreement.md`.
 - **Done when:** the gold labels exist and the agreement is written down.
@@ -476,3 +485,5 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 25 Nov | 8c | Part 1 (seed 42, dev set only): `hard32m-8ep` keeps 2e-5 (48.13; 5e-5 +0.67, 1e-4 +0.20); `kd32m` takes 1e-4 (50.68 → 53.11; 5e-5 52.06). Part 2: seeds 2 and 3 of `hard32m-8ep` and `kd32m-lr1e4`. About 35 minutes per run on a T4 | `results/lrpick_hard32m-8ep.md`, `lrpick_kd32m.md` |
 | 25 Nov | 8d | 17M with 1e-4: `kd17m-lr1e4` 49.71 ± 1.73 / 63.69 ± 1.10 (RAGTruth / PsiloQA); teacher adds +4.85 / +2.79 (all runs); against `kd17m` +4.07 / +0.03 (one run −2.15, does not count); against TinyLettuce-17M +5.45 / −2.76; against TinyLettuce-68M −0.34 / −5.69. 32M: `kd32m-lr1e4` 52.30 ± 1.60 / 67.32 ± 1.26, `hard32m-8ep` 51.12 ± 0.94 / 68.99 ± 0.47; teacher +1.18 (one run −0.27) / −1.67 (−2.32 up to 2B, counts); against TinyLettuce-32M +4.44 / −1.77; against TinyLettuce-68M +2.25 / −2.06; `kd68m` is +3.92 / +3.05 above it. `kd68m` against `ld_base` (150M): +0.79 (all runs higher, interval includes 0) / +0.77 (counts) | `results/summary_added.md` |
 | 25 Nov | 8e | 8-bit (w8), seed-42 runs, all test answers: `kd32m-lr1e4` (32.0M parameters) 122.4 → 34.6 MB, RAGTruth 52.98 → 53.08 (+0.10 [−0.06, 0.29]), PsiloQA 68.65 → 68.73 (+0.08 [0.05, 0.12]); `kd17m-lr1e4` 64.5 → 18.3 MB, RAGTruth 51.10 → 51.19 (+0.09 [−0.03, 0.23]), PsiloQA 63.02 → 62.98 (−0.04 [−0.09, 0.00]). Colab CPU, 8-bit, 1 thread: 0.65 s (32M), 0.25 s (17M). Laptop as in step 14, `kd32m-lr1e4` 8-bit: median 0.47 s on 1 thread (90th percentile 1.15 s), 0.36 s on 2; full precision 0.42 / 0.35 s; memory added 572 MB (8-bit), 652 MB (full). The 32M meets the S5 fallback (exploratory, added later); the 68M does not | `results/kd*-lr1e4_export.json`, `_int8_n2700.json`, `_int8_psilo.json`, `_bench_colab.json`; `work\results\kd32m-lr1e4_bench_laptop.json` on the laptop |
+| 28 Nov | 16 | Pilot set: 26 passages (16 course, written from the CoSc4035 slides' topics; 10 health, CDC excerpts checked line by line against the live pages) and 67 questions (34 course, 33 health; 51 answered fully by the passage, 8 in part, 8 not at all), all kept after review by Gemechu and the colleague | `pilot/` |
+| 28 Nov | 17 | `run.py pilotgen` and the step 17 cell written; tests for the pilot file and the command pass (with a made-up answering model) | `run.py`, `odh/pilot.py`, `colab/plan.ipynb`, `tests/test_pilot.py` |

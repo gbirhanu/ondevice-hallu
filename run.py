@@ -22,6 +22,7 @@
     python run.py summary                         # mean and spread over seeds; differences that count
     python run.py density                         # how many errors each set of answers holds (no GPU)
     python run.py lrpick --names kd17m kd17m-lr5e5 kd17m-lr1e4   # keep 2e-5 or another learning rate (dev set)
+    python run.py pilotgen                        # phone-sized models answer the pilot questions (GPU)
 
 Every command skips work whose result file already exists (add --redo to repeat it).
 Results are small JSON files in --work-dir/results; nothing else is ever overwritten.
@@ -52,7 +53,7 @@ LADDER = [
 
 
 def paths(work):
-    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals', 'extra', 'llm')}
+    p = {k: os.path.join(work, k) for k in ('results', 'preds', 'onnx', 'models', 'signals', 'extra', 'llm', 'pilot')}
     for d in p.values():
         os.makedirs(d, exist_ok=True)
     return p
@@ -485,6 +486,78 @@ def cmd_generate(args, p):
                      'max_new_tokens': args.max_new_tokens, 'seconds': round(seconds)})
     print(f'{gen}: {len(extra)} answers kept, {dropped} left out (unfinished or empty); '
           f'{sum(words) / max(len(words), 1):.0f} words on average.')
+
+
+def cmd_pilotgen(args, p):
+    """Step 17: each phone-sized model answers every pilot question (pilot/questions.jsonl) from its passage,
+    with RAGTruth's question-answering prompt and the same sampling as the new training answers ("generate").
+    An answer that stops at the token limit or is empty is written again with another seed, up to --attempts
+    times. Saves <work-dir>/pilot/answers.jsonl and results/pilot_answers.json / .md."""
+    from odh import distill, pilot
+    questions = pilot.load_questions(args.questions or pilot.QUESTIONS)
+    if not questions:
+        raise SystemExit(f'No final questions in {args.questions or pilot.QUESTIONS}.')
+    gens = args.generators or distill.DEFAULT_GENERATORS
+    unknown = [g for g in gens if g not in distill.ANSWER_MODELS]
+    if unknown:
+        raise SystemExit(f'Unknown answering model(s) {unknown}; known: {", ".join(distill.ANSWER_MODELS)}.')
+    path = os.path.join(p['pilot'], 'answers.jsonl')
+    have = {} if args.redo else pilot.load_answers(path)
+    for gen in gens:
+        todo = [q for q in questions if pilot.answer_id(q['id'], gen) not in have]
+        if not todo:
+            print(f'Already done: {gen} ({len(questions)} answers).')
+            continue
+        hf_id = distill.ANSWER_MODELS[gen]
+        try:
+            tok, model = distill.load_small_generator(hf_id, device())
+        except Exception as err:                       # not found, or no access (licence not accepted)
+            raise SystemExit(f'Could not load {hf_id}: {type(err).__name__}: {str(err)[:300]}')
+        print(f'{gen} ({hf_id}) answers {len(todo)} pilot questions.')
+        t0 = time.time()
+        prompts = [pilot.prompt_of(q['question'], q['passage']) for q in todo]
+        got, pending = {}, list(range(len(todo)))
+        for attempt in range(1, args.attempts + 1):
+            answers = distill.generate(model, tok, [prompts[i] for i in pending],
+                                       max_new_tokens=args.max_new_tokens, seed=1000 * attempt)
+            again = []
+            for i, a in zip(pending, answers):
+                a = a or {'answer': '', 'finished': False, 'new_tokens': 0}
+                got[i] = {**a, 'attempts': attempt}
+                if not a['finished'] or not a['answer'].strip():
+                    again.append(i)
+            pending = again
+            if not pending:
+                break
+        for i, q in enumerate(todo):
+            have[pilot.answer_id(q['id'], gen)] = {
+                'id': pilot.answer_id(q['id'], gen), 'question_id': q['id'], 'doc_id': q['doc_id'],
+                'domain': q['domain'], 'generator': gen, 'hf_id': hf_id, 'prompt': prompts[i],
+                'answer': got[i]['answer'], 'finished': got[i]['finished'], 'new_tokens': got[i]['new_tokens'],
+                'attempts': got[i]['attempts'], 'max_new_tokens': args.max_new_tokens}
+        order = [pilot.answer_id(q['id'], g) for q in questions for g in gens if pilot.answer_id(q['id'], g) in have]
+        pilot.save_answers(path, [have[k] for k in order] + [v for k, v in have.items() if k not in set(order)])
+        print(f'  done in {time.time() - t0:.0f}s; {len(pending)} still unfinished after {args.attempts} attempts.')
+        del model
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+    rows = [r for r in have.values() if r['generator'] in gens]
+    stats = pilot.summary(rows, questions, gens)
+    write_json(os.path.join(p['results'], 'pilot_answers.json'), {'questions': len(questions), 'generators': stats})
+    lines = ['| Answering model | Answers | Unfinished | Written again | Mean words | "Unable to answer" when the '
+             'passage answers it fully / in part / not at all |', '|---|---|---|---|---|---|']
+    for g, st in stats.items():
+        ref = ' / '.join(f"{st['refused'][a]} of {st['asked'][a]}" for a in ('yes', 'partly', 'no'))
+        lines.append(f"| {g} | {st['answers']} | {st['unfinished']} | {st['retried']} | {st['mean_words']} | {ref} |")
+    lines.append(f'\n{len(questions)} pilot questions; answers in pilot/answers.jsonl. "Unfinished": stopped at '
+                 f'{args.max_new_tokens} new tokens even after {args.attempts} attempts.')
+    md = '\n'.join(lines)
+    with open(os.path.join(p['results'], 'pilot_answers.md'), 'w', encoding='utf-8') as fh:
+        fh.write(md + '\n')
+    print(md)
 
 
 def cmd_teach(args, p):
@@ -1344,7 +1417,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('step', choices=['models', 'score', 'export', 'check8bit', 'bench', 'train', 'table',
                                      'signals', 'fusion', 'teach', 'generate', 'distill', 'llmlabel', 'psilo',
-                                     'compare', 'summary', 'density', 'lrpick'])
+                                     'compare', 'summary', 'density', 'lrpick', 'pilotgen'])
     ap.add_argument('--name', help='run name, e.g. tiny68m')
     ap.add_argument('--model', help='Hugging Face id or folder (default: from "models" or a trained run)')
     ap.add_argument('--base', help='train: the model to start from')
@@ -1370,14 +1443,14 @@ def main():
     ap.add_argument('--split', default='test', help='signals: which RAGTruth answers (test or train)')
     ap.add_argument('--no-4bit', action='store_true', help='signals: load the answering model in 16-bit')
     ap.add_argument('--generators', nargs='+', help='fusion: answering models to use; teach: sets of new '
-                    'answers to label (default: all found)')
+                    'answers to label (default: all found); pilotgen: answering models (default: the three small ones)')
     ap.add_argument('--text', nargs='+', help='fusion: text checkers (default: tiny17m tiny32m tiny68m ld_base)')
     ap.add_argument('--folds', type=int, default=5, help='fusion: cross-validation folds')
     ap.add_argument('--teacher', help='train: run name of the teacher whose labels to learn from, e.g. ld_large')
     ap.add_argument('--alpha', type=float, default=0.5,
                     help='train with --teacher: weight of the human label (the teacher gets 1 - alpha)')
     ap.add_argument('--extra', nargs='+', help='train with --teacher: also learn from these small models\' answers')
-    ap.add_argument('--max-new-tokens', type=int, default=450, help='generate: longest answer, in tokens')
+    ap.add_argument('--max-new-tokens', type=int, default=450, help='generate, pilotgen: longest answer, in tokens')
     ap.add_argument('--names', nargs='+', help='distill, psilo: runs to show or score (default: all scored ones); '
                     'llmlabel --on test: checkers scored on the same answers; summary: runs to show, without -s2/-s3; '
                     'lrpick: the run in use first, then the runs with other learning rates')
@@ -1397,10 +1470,13 @@ def main():
     ap.add_argument('--pairs', nargs='+', help='compare, summary: pairs of runs A:B, e.g. kd17m:kdlarge17m '
                     '(summary: default the pairs the success criteria need)')
     ap.add_argument('--out', help='compare, summary: file name in results/ (default compare.md / summary.md)')
+    ap.add_argument('--questions', help='pilotgen: the questions file (default: pilot/questions.jsonl)')
+    ap.add_argument('--attempts', type=int, default=3, help='pilotgen: tries for an answer that stops at the '
+                    'token limit or is empty')
     ap.add_argument('--redo', action='store_true')
     args = ap.parse_args()
     if args.step not in ('models', 'table', 'signals', 'fusion', 'generate', 'distill', 'psilo', 'compare',
-                         'summary', 'density', 'lrpick') \
+                         'summary', 'density', 'lrpick', 'pilotgen') \
             and not args.name:
         ap.error('--name is required')
     if args.step in ('signals', 'generate') and not args.generator:
@@ -1423,7 +1499,7 @@ def main():
      'bench': cmd_bench, 'train': cmd_train, 'table': cmd_table, 'signals': cmd_signals,
      'fusion': cmd_fusion, 'teach': cmd_teach, 'generate': cmd_generate, 'distill': cmd_distill,
      'llmlabel': cmd_llmlabel, 'psilo': cmd_psilo, 'compare': cmd_compare, 'summary': cmd_summary,
-     'density': cmd_density, 'lrpick': cmd_lrpick}[args.step](args, p)
+     'density': cmd_density, 'lrpick': cmd_lrpick, 'pilotgen': cmd_pilotgen}[args.step](args, p)
 
 
 if __name__ == '__main__':
