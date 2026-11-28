@@ -65,7 +65,9 @@ details{margin:10px 0}summary{cursor:pointer;font-weight:600;min-height:32px}
 .types button.cancel{min-height:44px}
 button.primary{background:var(--ok);color:#fff;border-color:var(--ok);font-weight:600}
 button.primary:disabled{opacity:.6}
-.flash{color:var(--ok);font-weight:600;font-size:14px;min-height:20px;margin:6px 0 0}
+.flash{color:var(--ink);font-weight:600;font-size:15px;background:color-mix(in srgb,var(--ok) 18%,var(--paper));border:1px solid var(--ok);border-radius:8px;padding:8px 12px;margin:0 0 12px}
+.flash:empty{display:none}
+#pos{font-size:18px;font-weight:800;color:var(--ink);margin:4px 0 2px}
 .chiplegend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--soft);margin-top:8px}
 .chiplegend i{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:4px;background:var(--paper)}
 .chiplegend i.s1{border:1px dashed var(--tl)}.chiplegend i.s2{background:color-mix(in srgb,var(--ok) 22%,var(--paper))}.chiplegend i.s3{background:color-mix(in srgb,var(--cl) 18%,var(--paper))}
@@ -92,6 +94,7 @@ table{border-collapse:collapse;font-size:14px;width:100%}td{border-top:1px solid
 </header>
 <main>
   <section class="card work" aria-label="Answer to mark">
+    <p class="flash" id="flash" aria-live="polite"></p>
     <details class="how" id="howBox" open>
       <summary>How to mark (read this first)</summary>
       <ol>
@@ -115,7 +118,6 @@ table{border-collapse:collapse;font-size:14px;width:100%}td{border-top:1px solid
     <div class="row">
       <button id="finish" class="primary">No errors: finish this answer</button>
     </div>
-    <p class="flash" id="flash" aria-live="polite"></p>
     <label for="noteBox" class="note">Your note (optional): any doubt about this answer, to discuss with your colleague later</label>
     <textarea id="noteBox"></textarea>
     <p class="step">Move between answers</p>
@@ -203,8 +205,8 @@ function render() {
   $('noteBox').value = s.note || '';
   const nm = `${spans.length} mark${spans.length > 1 ? 's' : ''}`;
   $('state').className = 'status' + (s.done ? ' done' : '');
-  $('state').textContent = 'This answer: ' + (s.done ? (spans.length ? `finished, ${nm}` : 'finished, no errors')
-    : (spans.length ? `${nm} so far, not finished yet` : 'not finished yet'));
+  $('state').textContent = `Answer ${pos + 1}: ` + (s.done ? (spans.length ? `finished, ${nm}` : 'finished, no errors')
+    : (spans.length ? `${nm} so far, not finished yet (press Finish when you have checked all of it)` : 'not checked yet'));
   $('finish').disabled = s.done;
   $('finish').textContent = s.done ? '✓ Finished' : (spans.length ? `Finish this answer (${nm})` : 'No errors: finish this answer');
   $('prev').disabled = pos === 0; $('next').disabled = pos === L.length - 1;
@@ -299,8 +301,8 @@ $('finish').onclick = () => {
   const a = cur(), s = st(a.m); if (s.done) return;
   s.done = true; pending = null; selMark = -1; touch(a);
   const L = list(), n = s.spans.length, what = n ? `${n} mark${n > 1 ? 's' : ''}` : 'no errors';
-  if (pos < L.length - 1) { $('flash').textContent = `Answer ${pos + 1} finished (${what}). Now showing answer ${pos + 2}.`; go(pos + 1, true); }
-  else { const open = L.filter(x => !finished(x.m)).length; $('flash').textContent = `Answer ${pos + 1} finished (${what}). ` + (open ? `This was the last answer; ${open} still not finished: use “Go to the next unfinished answer”.` : 'Every answer in this round is finished.'); render(); }
+  if (pos < L.length - 1) { $('flash').textContent = `✓ Answer ${pos + 1} is saved as finished (${what}). You are now on answer ${pos + 2}.`; go(pos + 1, true); }
+  else { const open = L.filter(x => !finished(x.m)).length; $('flash').textContent = `✓ Answer ${pos + 1} is saved as finished (${what}). ` + (open ? `This was the last answer; ${open} still not finished: use “Go to the next unfinished answer”.` : 'Every answer in this round is finished.'); render(); }
 };
 $('noteBox').addEventListener('change', () => { const a = cur(); st(a.m).note = $('noteBox').value; touch(a); renderExport(); });
 try { if (localStorage.getItem('pilot-how-closed') === '1') $('howBox').open = false; } catch (e) {}
