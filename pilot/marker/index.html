@@ -55,6 +55,21 @@ details{margin:10px 0}summary{cursor:pointer;font-weight:600;min-height:32px}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px;margin:4px 0}
 .legend span{padding:0 6px;border-radius:3px}
 .note{font-size:14px;color:var(--soft)}
+.how{background:color-mix(in srgb,var(--tl) 8%,var(--paper));border:1px solid var(--line);border-radius:10px;padding:8px 14px;margin:0 0 14px}
+.how ol{margin:6px 0 8px;padding-left:22px}.how li{margin:4px 0}.how p{margin:6px 0;font-size:15px}
+.step{font-size:15px;font-weight:600;color:var(--ink);margin:16px 0 6px}
+.step small{font-weight:400;color:var(--soft);font-size:14px}
+.anslabel{display:inline-block;font-size:12px;font-weight:800;letter-spacing:.06em;background:var(--ink);color:var(--paper);border-radius:4px;padding:1px 8px}
+.types{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
+.types button{text-align:left;padding:8px 12px;line-height:1.3}.types button small{display:block;color:var(--soft);font-size:13px;margin-top:2px}
+.types button.cancel{min-height:44px}
+button.primary{background:var(--ok);color:#fff;border-color:var(--ok);font-weight:600}
+button.primary:disabled{opacity:.6}
+.flash{color:var(--ok);font-weight:600;font-size:14px;min-height:20px;margin:6px 0 0}
+.chiplegend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--soft);margin-top:8px}
+.chiplegend i{display:inline-block;width:14px;height:14px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:4px;background:var(--paper)}
+.chiplegend i.s1{border:1px dashed var(--tl)}.chiplegend i.s2{background:color-mix(in srgb,var(--ok) 22%,var(--paper))}.chiplegend i.s3{background:color-mix(in srgb,var(--cl) 18%,var(--paper))}
+.readonly{font-size:13px;color:var(--soft);margin:0 0 10px}
 .warn{background:color-mix(in srgb,var(--cl) 12%,var(--paper));border:1px solid var(--cl);border-radius:8px;padding:8px 12px;margin-top:10px;font-size:14px}
 table{border-collapse:collapse;font-size:14px;width:100%}td{border-top:1px solid var(--line);padding:6px 6px 6px 0;vertical-align:top}
 @media(max-width:900px){main{grid-template-columns:minmax(0,1fr)}.passage{position:static;max-height:none;order:2}.work{order:1}}
@@ -66,48 +81,66 @@ table{border-collapse:collapse;font-size:14px;width:100%}td{border-top:1px solid
   <h1>Pilot answer marking</h1>
   <div class="meta"><span id="who">Loading…</span><span id="save" aria-live="polite"></span><span id="count"></span></div>
   <div class="row">
-    <button id="vPractice" aria-pressed="true">Practice round (10)</button>
-    <button id="vAll" aria-pressed="false">All answers (179)</button>
+    <button id="vPractice" aria-pressed="true">Practice round (10 answers)</button>
+    <button id="vAll" aria-pressed="false">Full round (all 179 answers)</button>
     <div class="bar" aria-hidden="true"><i id="prog" style="width:0"></i></div>
-    <button id="exportDl">Download my marks</button>
-    <button id="exportCp">Copy my marks</button>
+    <button id="exportDl" disabled title="Nothing to download yet: mark at least one answer">Download my marks</button>
+    <button id="exportCp" disabled title="Nothing to copy yet: mark at least one answer">Copy my marks</button>
   </div>
+  <p class="note" style="margin:8px 0 0">Do the practice round first. Start the full round only after you have discussed the practice round.</p>
   <div id="warn"></div>
 </header>
 <main>
   <section class="card work" aria-label="Answer to mark">
+    <details class="how" id="howBox" open>
+      <summary>How to mark (read this first)</summary>
+      <ol>
+        <li><b>Read the passage</b> (on the right; below on a phone). For this task the passage is the only truth.</li>
+        <li><b>Read the question.</b> A small AI model was given this passage and this question.</li>
+        <li><b>Read the model's answer</b> (the box marked ANSWER) and check every claim in it against the passage.</li>
+        <li>If some words in the answer <b>say something the passage does not say</b>, or <b>say it differently from the passage</b>, select those words <b>in the answer</b> with the mouse. Then press the button that says what is wrong.</li>
+        <li>When you have checked the whole answer, press the green <b>Finish</b> button. If you marked nothing, it says <b>“No errors: finish this answer”</b>. The page then shows the next answer.</li>
+      </ol>
+      <p>You only select words in the <b>answer</b>. The passage and the question are only for reading; they cannot be marked.</p>
+      <p>Example from these answers: the passage says “more than 95%”, the answer says “approximately 95%”. Select “approximately 95%” and press <b>Subtle conflict</b>.</p>
+    </details>
     <h2 id="pos">Answer</h2>
+    <p class="step">Question the model was asked</p>
     <p class="q" id="q"></p>
-    <details id="hintBox"><summary>Short answer from the passage (a hint only)</summary><p class="note" id="hint"></p></details>
-    <h2>The answer: select the words the passage does not support</h2>
+    <details id="hintBox"><summary>Show our short correct answer (optional help)</summary><p class="note" id="hint"></p><p class="note">This is only a help. The passage is what counts.</p></details>
+    <p class="step"><span class="anslabel">ANSWER</span> written by the model <small>· select here the words the passage does not support</small></p>
     <div id="ans" tabindex="0"></div>
-    <div class="tools" id="tools"><p>Select words in the answer to mark them, or click a mark to change it.</p></div>
-    <div class="row">
-      <button id="prev">← Previous</button>
-      <button id="noErr">No unsupported parts</button>
-      <button id="done">Done</button>
-      <button id="next">Next →</button>
-      <button id="nextOpen">Next not finished</button>
-    </div>
+    <div class="tools" id="tools"><p>To mark: select words in the answer box above with the mouse. To change or remove a mark: click on it.</p></div>
     <p class="status" id="state"></p>
-    <label for="noteBox" class="note">Note (doubts, for the comparison)</label>
+    <div class="row">
+      <button id="finish" class="primary">No errors: finish this answer</button>
+    </div>
+    <p class="flash" id="flash" aria-live="polite"></p>
+    <label for="noteBox" class="note">Your note (optional): any doubt about this answer, to discuss with your colleague later</label>
     <textarea id="noteBox"></textarea>
+    <p class="step">Move between answers</p>
+    <div class="row">
+      <button id="prev">← Previous answer</button>
+      <button id="next">Next answer →</button>
+      <button id="nextOpen">Go to the next unfinished answer</button>
+    </div>
+    <div class="chips" id="chips" aria-label="Answers in this round"></div>
+    <div class="chiplegend"><span><i></i>not started</span><span><i class="s1"></i>has marks, not finished</span><span><i class="s2"></i>finished, no errors</span><span><i class="s3"></i>finished, with marks</span><span>dark outline: the answer on screen</span></div>
     <details>
-      <summary>How to mark (short guide)</summary>
-      <div class="legend"><span class="EC">Evident conflict</span><span class="SC">Subtle conflict</span><span class="EB">Evident baseless</span><span class="SB">Subtle baseless</span></div>
+      <summary>The four types in more detail</summary>
       <table>
-        <tr><td>Evident conflict</td><td>The passage clearly contradicts it: a wrong number, name, step or the opposite claim.</td></tr>
-        <tr><td>Subtle conflict</td><td>Slightly changes the passage's meaning: a weaker or stronger word, a changed condition or scope ("approximately 95%" for "more than 95%").</td></tr>
-        <tr><td>Evident baseless</td><td>A clear claim the passage does not contain, even if it is true in the world.</td></tr>
-        <tr><td>Subtle baseless</td><td>A small added detail, reason, generalisation or inference.</td></tr>
+        <tr><td><span class="EC">Evident conflict</span></td><td>The passage clearly says something different: a wrong number, name, step or the opposite claim.</td></tr>
+        <tr><td><span class="SC">Subtle conflict</span></td><td>Close to the passage, but the meaning is changed: a weaker or stronger word, a changed condition or scope (“approximately 95%” for “more than 95%”).</td></tr>
+        <tr><td><span class="EB">Evident baseless</span></td><td>A clear claim the passage does not contain at all, even if it is true in the world.</td></tr>
+        <tr><td><span class="SB">Subtle baseless</span></td><td>A small added detail, reason, generalisation or inference that is not in the passage.</td></tr>
       </table>
-      <p class="note">Mark the shortest part that carries the claim. Do not mark paraphrases, "Based on the passage…", repeated questions, the reply "Unable to answer based on given passages.", true statements that the passage does not say something, missing information, generic advice, or formatting. Keys: 1–4 types, Delete removes a mark, ← → move.
+      <p class="note">Mark the shortest part that carries the wrong claim. Do not mark: rewording of the passage, “Based on the passage…”, the question repeated, the reply “Unable to answer based on given passages.”, a true statement that the passage does not say something, missing information, general advice, or formatting. Keys: 1–4 choose a type, Delete removes a mark, ← → move between answers.
       Full guide: <a href="https://github.com/gbirhanu/ondevice-hallu/blob/main/pilot/GUIDE.md">pilot/GUIDE.md</a></p>
     </details>
-    <div class="chips" id="chips" aria-label="Answers in this round"></div>
   </section>
   <section class="card passage" aria-label="Passage">
     <h2 id="ptitle">Passage</h2>
+    <p class="readonly">The only truth for this task. Read it to check the answer; you do not mark it.</p>
     <div class="ptext" id="ptext"></div>
   </section>
 </main>
@@ -117,7 +150,8 @@ const TYPES = [['EC', 'Evident conflict'], ['SC', 'Subtle conflict'], ['EB', 'Ev
 const KEY = 'pilot-marks-v1';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-let D = null, view = 'practice', pos = 0, pending = null, selMark = -1, shownDoc = null;
+const TDESC = {EC: 'the passage clearly says something different', SC: 'close to the passage, but the meaning is changed', EB: 'a claim that is not in the passage at all', SB: 'a small added detail or reason not in the passage'};
+let D = null, view = 'practice', pos = 0, pending = null, selMark = -1, shownDoc = null, outside = '';
 let S = {v: 1, answers: {}};
 let docRef = null, dirty = false, writing = false, timer = null, saveMode = 'local';
 try { const l = JSON.parse(localStorage.getItem(KEY) || 'null'); if (l && l.answers) S = l; } catch (e) {}
@@ -127,6 +161,8 @@ const cur = () => list()[pos];
 const st = m => S.answers[m] || (S.answers[m] = {spans: [], done: false, note: '', t: ''});
 const finished = m => !!(S.answers[m] && S.answers[m].done);
 const touched = () => Object.fromEntries(Object.entries(S.answers).filter(([, x]) => x.t));
+const hasContent = x => !!(x.done || (x.spans && x.spans.length) || (x.note && x.note.trim()));
+const exportable = () => Object.fromEntries(Object.entries(touched()).filter(([, x]) => hasContent(x)));
 
 function setSave(text) { $('save').textContent = text; }
 function touch(a) { st(a.m).t = new Date().toISOString(); persist(); }
@@ -165,23 +201,28 @@ function render() {
   });
   $('ans').innerHTML = html + esc(a.text.slice(at));
   $('noteBox').value = s.note || '';
+  const nm = `${spans.length} mark${spans.length > 1 ? 's' : ''}`;
   $('state').className = 'status' + (s.done ? ' done' : '');
-  $('state').textContent = s.done ? (spans.length ? `Done · ${spans.length} mark${spans.length > 1 ? 's' : ''}` : 'Done · no unsupported parts')
-    : (spans.length ? `${spans.length} mark${spans.length > 1 ? 's' : ''} · press Done when finished` : 'Not marked yet');
-  $('noErr').disabled = spans.length > 0;
+  $('state').textContent = 'This answer: ' + (s.done ? (spans.length ? `finished, ${nm}` : 'finished, no errors')
+    : (spans.length ? `${nm} so far, not finished yet` : 'not finished yet'));
+  $('finish').disabled = s.done;
+  $('finish').textContent = s.done ? '✓ Finished' : (spans.length ? `Finish this answer (${nm})` : 'No errors: finish this answer');
   $('prev').disabled = pos === 0; $('next').disabled = pos === L.length - 1;
   renderTools(); renderChips(); renderCount();
 }
 function renderTools() {
   const a = cur(), t = $('tools');
+  const tb = (x, i, pressed) => `<button class="t-${x[0]}" data-t="${x[0]}"${pressed === undefined ? '' : ` aria-pressed="${pressed}"`}>${i + 1} · ${x[1]}<small>${TDESC[x[0]]}</small></button>`;
   if (pending) {
-    t.innerHTML = '<p>Mark “<b id="selTxt"></b>” as:</p><div class="row">' + TYPES.map((x, i) => `<button class="t-${x[0]}" data-t="${x[0]}">${i + 1} · ${x[1]}</button>`).join('') + '<button data-t="">Cancel</button></div>';
+    t.innerHTML = '<p>You selected “<b id="selTxt"></b>”. What is wrong with it?</p><div class="types">' + TYPES.map((x, i) => tb(x, i)).join('') + '<button class="cancel" data-t="">Cancel: do not mark</button></div>';
     $('selTxt').textContent = a.text.slice(pending[0], pending[1]);
   } else if (selMark >= 0) {
     const sp = st(a.m).spans[selMark];
-    t.innerHTML = '<p>Mark “<b id="selTxt"></b>”: change its type or remove it.</p><div class="row">' + TYPES.map((x, i) => `<button class="t-${x[0]}" data-t="${x[0]}" aria-pressed="${sp[2] === x[0]}">${i + 1} · ${x[1]}</button>`).join('') + '<button data-t="del">Remove</button><button data-t="">Close</button></div>';
+    t.innerHTML = '<p>Marked words “<b id="selTxt"></b>”: choose another type, or remove the mark.</p><div class="types">' + TYPES.map((x, i) => tb(x, i, sp[2] === x[0])).join('') + '<button class="cancel" data-t="del">Remove this mark</button><button class="cancel" data-t="">Close</button></div>';
     $('selTxt').textContent = a.text.slice(sp[0], sp[1]);
-  } else t.innerHTML = '<p>Select words in the answer to mark them, or click a mark to change it.</p>';
+  } else if (outside) t.innerHTML = `<p><b>That text is in the ${outside}.</b> You can only mark words in the answer box above.</p>`;
+  else t.innerHTML = '<p>To mark: select words in the answer box above with the mouse. To change or remove a mark: click on it.</p>';
+  $('finish').disabled = !!pending || selMark >= 0 || st(a.m).done;
 }
 function renderChips() {
   $('chips').innerHTML = list().map((a, i) => {
@@ -193,6 +234,15 @@ function renderCount() {
   const L = list(), n = L.filter(a => finished(a.m)).length, all = D.answers.filter(a => finished(a.m)).length;
   $('count').textContent = `${n} of ${L.length} finished in this round · ${all} of ${D.answers.length} overall`;
   $('prog').style.width = (100 * n / L.length) + '%';
+  renderExport();
+}
+function renderExport() {
+  const k = Object.keys(exportable()).length;
+  $('exportDl').disabled = $('exportCp').disabled = k === 0;
+  $('exportDl').textContent = k ? `Download my marks (${k})` : 'Download my marks';
+  $('exportCp').textContent = k ? `Copy my marks (${k})` : 'Copy my marks';
+  $('exportDl').title = k ? `Download the marks for ${k} answer${k > 1 ? 's' : ''}` : 'Nothing to download yet: mark at least one answer';
+  $('exportCp').title = k ? `Copy the marks for ${k} answer${k > 1 ? 's' : ''}` : 'Nothing to copy yet: mark at least one answer';
 }
 
 function offsetIn(box, node, off) { const r = document.createRange(); r.selectNodeContents(box); r.setEnd(node, off); return r.toString().length; }
@@ -200,7 +250,12 @@ function readSelection() {
   const sel = window.getSelection(), box = $('ans');
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
   const r = sel.getRangeAt(0);
-  if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) return;
+  if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) {
+    const c = r.commonAncestorContainer, where = $('ptext').contains(c) ? 'passage' : $('q').contains(c) ? 'question' : '';
+    if (where && !pending && selMark < 0 && outside !== where) { outside = where; renderTools(); }
+    return;
+  }
+  outside = '';
   const T = cur().text;
   let s = offsetIn(box, r.startContainer, r.startOffset), e = offsetIn(box, r.endContainer, r.endOffset);
   if (e < s) [s, e] = [e, s];
@@ -209,7 +264,7 @@ function readSelection() {
   while (s < e && /\s/.test(T[s])) s++;
   while (e > s && /\s/.test(T[e - 1])) e--;
   if (e <= s) return;
-  pending = [s, e]; selMark = -1; renderTools();
+  pending = [s, e]; selMark = -1; outside = ''; renderTools();
 }
 function applyType(t) {
   const a = cur(), s = st(a.m);
@@ -222,8 +277,8 @@ function applyType(t) {
   touch(a); render();
 }
 function removeMark() { const a = cur(); if (selMark < 0) return; st(a.m).spans.splice(selMark, 1); st(a.m).done = false; selMark = -1; touch(a); render(); }
-function go(p) { const L = list(); if (p < 0 || p >= L.length) return; pos = p; pending = null; selMark = -1; render(); window.scrollTo({top: 0}); }
-function setView(v) { view = v; pos = 0; $('vPractice').setAttribute('aria-pressed', v === 'practice'); $('vAll').setAttribute('aria-pressed', v === 'all'); pending = null; selMark = -1; render(); }
+function go(p, keepFlash) { const L = list(); if (p < 0 || p >= L.length) return; pos = p; pending = null; selMark = -1; outside = ''; if (!keepFlash) $('flash').textContent = ''; render(); window.scrollTo({top: 0}); }
+function setView(v) { view = v; pos = 0; outside = ''; $('flash').textContent = ''; $('vPractice').setAttribute('aria-pressed', v === 'practice'); $('vAll').setAttribute('aria-pressed', v === 'all'); pending = null; selMark = -1; render(); }
 
 $('ans').addEventListener('mouseup', () => setTimeout(readSelection, 0));
 $('ans').addEventListener('touchend', () => setTimeout(readSelection, 250));
@@ -234,35 +289,44 @@ $('tools').addEventListener('click', e => {
   const t = b.dataset.t;
   if (t === 'del') removeMark();
   else if (t) applyType(t);
-  else { pending = null; selMark = -1; window.getSelection().removeAllRanges(); render(); }
+  else { pending = null; selMark = -1; outside = ''; window.getSelection().removeAllRanges(); render(); }
 });
 $('chips').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(+b.dataset.p); });
 $('prev').onclick = () => go(pos - 1);
 $('next').onclick = () => go(pos + 1);
 $('nextOpen').onclick = () => { const L = list(); for (let k = 1; k <= L.length; k++) { const i = (pos + k) % L.length; if (!finished(L[i].m)) return go(i); } };
-$('done').onclick = () => { const a = cur(); st(a.m).done = true; touch(a); render(); };
-$('noErr').onclick = () => { const a = cur(); if (st(a.m).spans.length) return; st(a.m).done = true; touch(a); render(); };
-$('noteBox').addEventListener('change', () => { const a = cur(); st(a.m).note = $('noteBox').value; touch(a); });
+$('finish').onclick = () => {
+  const a = cur(), s = st(a.m); if (s.done) return;
+  s.done = true; pending = null; selMark = -1; touch(a);
+  const L = list(), n = s.spans.length, what = n ? `${n} mark${n > 1 ? 's' : ''}` : 'no errors';
+  if (pos < L.length - 1) { $('flash').textContent = `Answer ${pos + 1} finished (${what}). Now showing answer ${pos + 2}.`; go(pos + 1, true); }
+  else { const open = L.filter(x => !finished(x.m)).length; $('flash').textContent = `Answer ${pos + 1} finished (${what}). ` + (open ? `This was the last answer; ${open} still not finished: use “Go to the next unfinished answer”.` : 'Every answer in this round is finished.'); render(); }
+};
+$('noteBox').addEventListener('change', () => { const a = cur(); st(a.m).note = $('noteBox').value; touch(a); renderExport(); });
+try { if (localStorage.getItem('pilot-how-closed') === '1') $('howBox').open = false; } catch (e) {}
+$('howBox').addEventListener('toggle', () => { try { localStorage.setItem('pilot-how-closed', $('howBox').open ? '0' : '1'); } catch (e) {} });
 $('vPractice').onclick = () => setView('practice');
 $('vAll').onclick = () => setView('all');
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'TEXTAREA' || !D) return;
   if ((pending || selMark >= 0) && /^[1-4]$/.test(e.key)) { applyType(TYPES[+e.key - 1][0]); e.preventDefault(); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selMark >= 0) { removeMark(); e.preventDefault(); }
-  else if (e.key === 'Escape') { pending = null; selMark = -1; render(); }
+  else if (e.key === 'Escape') { pending = null; selMark = -1; outside = ''; render(); }
   else if (e.key === 'ArrowRight' && !pending) go(pos + 1);
   else if (e.key === 'ArrowLeft' && !pending) go(pos - 1);
 });
 
 function exportText(name) {
-  return JSON.stringify({annotator: name || '', exported: new Date().toISOString(), data_version: D.version, answers: touched()}, null, 1);
+  return JSON.stringify({annotator: name || '', exported: new Date().toISOString(), data_version: D.version, answers: exportable()}, null, 1);
 }
 let myName = '';
 $('exportCp').onclick = async () => {
+  if (!Object.keys(exportable()).length) { setSave('No marks yet: nothing to copy'); return; }
   try { await navigator.clipboard.writeText(exportText(myName)); setSave('Copied: paste it into a message to Gemechu'); }
   catch (e) { setSave('Copy was refused by the browser'); }
 };
 $('exportDl').onclick = async () => {
+  if (!Object.keys(exportable()).length) { setSave('No marks yet: nothing to download'); return; }
   const dl = (window.claude && window.claude.use) ? await window.claude.use('downloads').catch(() => null) : null;
   if (!dl) { setSave('Download is not available here: use Copy instead'); return; }
   try { await dl.save({filename: 'pilot_marks.json', data: exportText(myName)}); setSave('Download offered'); }
@@ -296,7 +360,7 @@ async function connect() {
   } catch (e) { clearTimeout(slow); saveMode = 'local'; setSave('Saved in this browser only'); }
 }
 
-fetch('data.json').then(r => r.json()).then(d => { D = d; $('vAll').textContent = `All answers (${D.answers.length})`; render(); connect(); })
+fetch('data.json').then(r => r.json()).then(d => { D = d; $('vAll').textContent = `Full round (all ${D.answers.length} answers)`; render(); connect(); })
   .catch(() => { $('q').textContent = 'The answers could not be loaded. Reload the page.'; });
 }
 </script>

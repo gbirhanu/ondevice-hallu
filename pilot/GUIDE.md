@@ -60,13 +60,23 @@ difference between conflict and baseless matters more than the difference betwee
 
 ## How to work
 
-1. Read the question and the passage first, then each answer.
-2. Select the unsupported words with the mouse (or by touch), then choose the type. Click a mark to change its type
-   or remove it.
-3. When an answer is finished, press **Done**. If it has nothing to mark, press **No unsupported parts**. Both
-   count as finished; an answer with no button pressed counts as not yet marked.
-4. Use the note box for doubts ("not sure if 'about' is a conflict"). Notes help when you compare.
-5. Your marks save as you work. You can stop and come back.
+The page shows three texts. The **passage** is the truth; you only read it. The **question** is what the model
+was asked; you only read it. The **answer** (the box marked ANSWER) is what the model wrote; this is the only text
+you mark.
+
+1. Read the passage, then the question, then the answer.
+2. Check every claim in the answer against the passage. If some words in the answer say something the passage does
+   not say, or say it differently, select those words in the answer with the mouse (or by touch). The page then
+   asks what is wrong with them: press one of the four types. Click a mark to change its type or remove it.
+3. When you have checked the whole answer, press the green **Finish** button. With marks it reads
+   "Finish this answer (2 marks)"; with no marks it reads "No errors: finish this answer", which records that the
+   whole answer is supported. The page then shows the next answer. An answer where Finish was not pressed counts
+   as not yet marked.
+4. **Previous answer** and **Next answer** move one answer back or forward without finishing anything.
+   **Go to the next unfinished answer** jumps to the next answer you have not finished. The numbered squares show
+   every answer in the round and its state; click one to go to it.
+5. Use the note box for doubts ("not sure if 'about' is a conflict"). Notes help when you compare.
+6. Your marks save as you work. You can stop and come back.
 
 ## Rounds
 
