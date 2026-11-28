@@ -497,7 +497,7 @@ def cmd_pilotgen(args, p):
     questions = pilot.load_questions(args.questions or pilot.QUESTIONS)
     if not questions:
         raise SystemExit(f'No final questions in {args.questions or pilot.QUESTIONS}.')
-    gens = args.generators or distill.DEFAULT_GENERATORS
+    gens = args.generators or pilot.GENERATORS
     unknown = [g for g in gens if g not in distill.ANSWER_MODELS]
     if unknown:
         raise SystemExit(f'Unknown answering model(s) {unknown}; known: {", ".join(distill.ANSWER_MODELS)}.')
@@ -510,7 +510,7 @@ def cmd_pilotgen(args, p):
             continue
         hf_id = distill.ANSWER_MODELS[gen]
         try:
-            tok, model = distill.load_small_generator(hf_id, device())
+            tok, model = distill.load_small_generator(hf_id, device(), float32=gen in distill.FLOAT32)
         except Exception as err:                       # not found, or no access (licence not accepted)
             raise SystemExit(f'Could not load {hf_id}: {type(err).__name__}: {str(err)[:300]}')
         print(f'{gen} ({hf_id}) answers {len(todo)} pilot questions.')
@@ -518,8 +518,8 @@ def cmd_pilotgen(args, p):
         prompts = [pilot.prompt_of(q['question'], q['passage']) for q in todo]
         got, pending = {}, list(range(len(todo)))
         for attempt in range(1, args.attempts + 1):
-            answers = distill.generate(model, tok, [prompts[i] for i in pending],
-                                       max_new_tokens=args.max_new_tokens, seed=1000 * attempt)
+            answers = distill.generate(model, tok, [prompts[i] for i in pending], max_new_tokens=args.max_new_tokens,
+                                       seed=1000 * attempt, batch_tokens=8000 if gen in distill.FLOAT32 else 24000)
             again = []
             for i, a in zip(pending, answers):
                 a = a or {'answer': '', 'finished': False, 'new_tokens': 0}
@@ -547,12 +547,14 @@ def cmd_pilotgen(args, p):
     rows = [r for r in have.values() if r['generator'] in gens]
     stats = pilot.summary(rows, questions, gens)
     write_json(os.path.join(p['results'], 'pilot_answers.json'), {'questions': len(questions), 'generators': stats})
-    lines = ['| Answering model | Answers | Unfinished | Written again | Mean words | "Unable to answer" when the '
-             'passage answers it fully / in part / not at all |', '|---|---|---|---|---|---|']
+    lines = ['| Answering model | Answers | To mark | Unfinished | Written again | Mean words | "Unable to answer" when '
+             'the passage answers it fully / in part / not at all |', '|---|---|---|---|---|---|---|']
     for g, st in stats.items():
         ref = ' / '.join(f"{st['refused'][a]} of {st['asked'][a]}" for a in ('yes', 'partly', 'no'))
-        lines.append(f"| {g} | {st['answers']} | {st['unfinished']} | {st['retried']} | {st['mean_words']} | {ref} |")
-    lines.append(f'\n{len(questions)} pilot questions; answers in pilot/answers.jsonl. "Unfinished": stopped at '
+        lines.append(f"| {g} | {st['answers']} | {st['to_mark']} | {st['unfinished']} | {st['retried']} | "
+                     f"{st['mean_words']} | {ref} |")
+    lines.append(f'\n{len(questions)} pilot questions; answers in pilot/answers.jsonl. "To mark": answers that are not '
+                 f'only the reply "Unable to answer based on given passages." "Unfinished": stopped at '
                  f'{args.max_new_tokens} new tokens even after {args.attempts} attempts.')
     md = '\n'.join(lines)
     with open(os.path.join(p['results'], 'pilot_answers.md'), 'w', encoding='utf-8') as fh:

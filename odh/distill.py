@@ -30,6 +30,7 @@ ANSWER_MODELS = {
     'qwen2.5-0.5b': 'Qwen/Qwen2.5-0.5B-Instruct',
     'qwen2.5-1.5b': 'Qwen/Qwen2.5-1.5B-Instruct',
     'smollm2-1.7b': 'HuggingFaceTB/SmolLM2-1.7B-Instruct',
+    'granite-3.3-2b': 'ibm-granite/granite-3.3-2b-instruct',         # Apache-2.0; added 28 Nov for the pilot set
     'llama-3.2-1b': 'meta-llama/Llama-3.2-1B-Instruct',            # *
     'gemma-2-2b': 'google/gemma-2-2b-it',                            # *
     'qwen2.5-7b': 'Qwen/Qwen2.5-7B-Instruct',
@@ -39,6 +40,9 @@ ANSWER_MODELS = {
 }
 SMALL_GENERATORS = ANSWER_MODELS                                     # older name
 LARGE = {'qwen2.5-7b', 'olmo2-7b', 'mistral-7b-v0.3', 'llama-3.1-8b'}
+# Models published in bfloat16 whose scaled activations may not fit in float16; a T4 has no bfloat16, so they are
+# loaded in float32 there (a 2.5B model needs about 10 GB).
+FLOAT32 = {'granite-3.3-2b'}
 DEFAULT_GENERATORS = ['qwen2.5-0.5b', 'qwen2.5-1.5b', 'smollm2-1.7b']
 LARGE_GENERATORS = ['qwen2.5-7b', 'olmo2-7b', 'mistral-7b-v0.3']
 CUTOFFS = np.round(np.arange(0.05, 0.951, 0.05), 2)
@@ -130,15 +134,16 @@ def extra_prompts(train_samples):
             for k, v in sorted(first.items(), key=lambda kv: (len(kv[0]), kv[0]))]
 
 
-def load_small_generator(hf_id, device='cuda', four_bit=False):
-    """An answering model for generation. four_bit: 4-bit NF4 weights (for 7-8B models on a T4)."""
+def load_small_generator(hf_id, device='cuda', four_bit=False, float32=False):
+    """An answering model for generation. four_bit: 4-bit NF4 weights (for 7-8B models on a T4);
+    float32: full precision even on a GPU (see FLOAT32)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(hf_id)
     tok.padding_side = 'left'
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    dtype = torch.float16 if device == 'cuda' else torch.float32
+    dtype = torch.float16 if device == 'cuda' and not float32 else torch.float32
     kwargs = {}
     if four_bit:
         from transformers import BitsAndBytesConfig

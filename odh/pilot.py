@@ -7,7 +7,11 @@ the checkers were trained and tested on, and saves the answers in <work-dir>/pil
 """
 import json
 import os
+import re
 
+# The phone-sized models that answer the pilot questions. Granite was added on 28 November because
+# Qwen2.5-0.5B replied "Unable to answer based on given passages." to 66 of the 67 questions.
+GENERATORS = ['qwen2.5-0.5b', 'qwen2.5-1.5b', 'smollm2-1.7b', 'granite-3.3-2b']
 QUESTIONS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'pilot', 'questions.jsonl')
 REFUSAL = 'Unable to answer based on given passages.'
 
@@ -34,6 +38,12 @@ def prompt_of(question, passage):
 def is_refusal(answer):
     """True when the answer says that the passage does not answer the question (RAGTruth's reply)."""
     return 'unable to answer based on given passage' in ' '.join(answer.lower().split())
+
+
+def is_bare_refusal(answer):
+    """True when the answer is only RAGTruth's refusal sentence. Such an answer makes no claim, so the annotators
+    do not mark it; it counts as an answer without errors."""
+    return re.sub(r'[\s"\'\u201c\u201d.]+', ' ', answer.lower()).strip() == 'unable to answer based on given passages'
 
 
 def answer_id(question_id, generator):
@@ -69,7 +79,8 @@ def summary(rows, questions, generators):
         refused = {a: sum(1 for r in rs if label[r['question_id']] == a and is_refusal(r['answer']))
                    for a in ('yes', 'partly', 'no')}
         asked = {a: sum(1 for r in rs if label[r['question_id']] == a) for a in ('yes', 'partly', 'no')}
-        out[g] = {'answers': len(rs), 'unfinished': sum(1 for r in rs if not r['finished']),
+        out[g] = {'answers': len(rs), 'to_mark': sum(1 for r in rs if not is_bare_refusal(r['answer'])),
+                  'unfinished': sum(1 for r in rs if not r['finished']),
                   'retried': sum(1 for r in rs if r['attempts'] > 1),
                   'refused': refused, 'asked': asked, 'mean_words': round(sum(words) / len(words), 1)}
     return out

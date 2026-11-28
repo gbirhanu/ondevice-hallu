@@ -38,6 +38,9 @@ class PilotFile(unittest.TestCase):
         self.assertTrue(pilot.is_refusal('Unable to answer based on given passages.'))
         self.assertTrue(pilot.is_refusal('I am unable to answer based on given  passage.'))
         self.assertFalse(pilot.is_refusal('X is a letter.'))
+        self.assertTrue(pilot.is_bare_refusal('"Unable to answer based on given passages."'))
+        self.assertTrue(pilot.is_bare_refusal('Unable to answer based on given passages'))
+        self.assertFalse(pilot.is_bare_refusal('There are four. Unable to answer based on given passages.'))
 
 
 def fake_generate(model, tok, prompts, max_new_tokens=450, seed=0, **kwargs):
@@ -64,12 +67,13 @@ class PilotAnswers(unittest.TestCase):
 
     def test_every_question_gets_one_answer_per_model_and_finished_work_is_kept(self):
         loads = []
-        with mock.patch.object(distill, 'load_small_generator', lambda hf_id, dev: loads.append(hf_id) or (None, None)), \
+        with mock.patch.object(distill, 'load_small_generator',
+                               lambda hf_id, dev, **kw: loads.append((hf_id, kw.get('float32'))) or (None, None)), \
                 mock.patch.object(distill, 'generate', fake_generate), mock.patch.object(run, 'device', lambda: 'cpu'):
             run.cmd_pilotgen(self.args, self.p)
             rows = list(pilot.load_answers(Path(self.p['pilot']) / 'answers.jsonl').values())
             self.assertEqual(len(rows), 67 * 2)
-            self.assertEqual(loads, ['Qwen/Qwen2.5-0.5B-Instruct', 'HuggingFaceTB/SmolLM2-1.7B-Instruct'])
+            self.assertEqual(loads, [('Qwen/Qwen2.5-0.5B-Instruct', False), ('HuggingFaceTB/SmolLM2-1.7B-Instruct', False)])
             bomb = [r for r in rows if r['question_id'] == 'c03-q2']
             self.assertTrue(all(r['finished'] and r['attempts'] == 2 for r in bomb))     # written again
             self.assertTrue(all(r['attempts'] == 1 for r in rows if r['question_id'] != 'c03-q2'))
@@ -80,7 +84,19 @@ class PilotAnswers(unittest.TestCase):
         self.assertEqual(stats['qwen2.5-0.5b']['refused']['no'], 1)                       # the antivirus question
         self.assertEqual(stats['qwen2.5-0.5b']['retried'], 1)
         self.assertEqual(stats['qwen2.5-0.5b']['asked'], {'yes': 51, 'partly': 8, 'no': 8})
-        self.assertIn('| qwen2.5-0.5b | 67 |', (Path(self.p['results']) / 'pilot_answers.md').read_text())
+        self.assertEqual(stats['qwen2.5-0.5b']['to_mark'], 66)                           # all but the bare refusal
+        self.assertIn('| qwen2.5-0.5b | 67 | 66 |', (Path(self.p['results']) / 'pilot_answers.md').read_text())
+
+    def test_granite_is_a_default_answer_writer_and_loads_in_full_precision(self):
+        self.args.generators = None
+        loads = []
+        with mock.patch.object(distill, 'load_small_generator',
+                               lambda hf_id, dev, **kw: loads.append((hf_id, kw.get('float32'))) or (None, None)), \
+                mock.patch.object(distill, 'generate', fake_generate), mock.patch.object(run, 'device', lambda: 'cpu'):
+            run.cmd_pilotgen(self.args, self.p)
+        self.assertEqual([g for g, _ in loads][-1], 'ibm-granite/granite-3.3-2b-instruct')
+        self.assertEqual(dict(loads)['ibm-granite/granite-3.3-2b-instruct'], True)
+        self.assertEqual(len(pilot.load_answers(Path(self.p['pilot']) / 'answers.jsonl')), 67 * 4)
 
     def test_an_unknown_model_is_refused(self):
         self.args.generators = ['no-such-model']

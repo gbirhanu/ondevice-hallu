@@ -383,11 +383,16 @@ choice in `results/lrpick_<student>.json`.
 - **Done when:** 50 questions, each with its passage.
 
 ### Step 17 — Answers from phone-sized models
+- **28 November, first run:** Qwen2.5-1.5B wrote 63 answers with content and SmolLM2-1.7B 48, but Qwen2.5-0.5B replied
+  "Unable to answer based on given passages." to 66 of the 67 questions. It does the same on RAGTruth's own question
+  prompts (one chunk of its new training answers: 64 of 64 such replies). IBM Granite-3.3-2B-Instruct (Apache-2.0)
+  is added as a fourth answering model; running the step 17 cell again writes only its answers. An answer that is
+  only that reply makes no claim: it is not marked and counts as an answer without errors (EVALUATION.md, 28 Nov).
 - [ ] **Who:** Claude wrote `run.py pilotgen` and the cell; Gemechu runs. **Needs:** step 16. **Time:** about 20–30 GPU minutes.
 - **Do:** Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-1.7B answer every question from its passage, with RAGTruth's
   question-answering prompt (one passage instead of three, and RAGTruth's own sentence asking for "Unable to answer
   based on given passages." when the passage does not answer). Sampling as for the new training answers; an answer
-  that stops at 450 tokens or is empty is written again with another seed (up to 3 tries). 201 answers. In
+  that stops at 450 tokens or is empty is written again with another seed (up to 3 tries). 268 answers (4 models). In
   `colab/plan.ipynb`, on a T4 GPU: the two setup cells, then the cell "Step 17".
 - **Output:** `work/pilot/answers.jsonl` on Drive (Claude copies it into `pilot/answers.jsonl` with step 18) and
   `results/pilot_answers.md`. **Done when:** every question has three answers.
@@ -400,7 +405,7 @@ choice in `results/lrpick_<student>.json`.
 
 ### Step 19 — Mark the answers and measure agreement
 - [ ] **Who:** Gemechu and the colleague, separately (about 1.5 days each); Claude computes agreement. **Needs:** step 18.
-- **Do:** each person marks all 201 answers alone. Claude computes word-level Cohen's κ and span F1 between the two.
+- **Do:** each person marks every answer that is not only the "Unable to answer" reply (about 170) alone. Claude computes word-level Cohen's κ and span F1 between the two.
   If κ < 0.6, discuss the disagreements and revise. Then agree one final marking per answer.
 - **Output:** `pilot/labels_a.jsonl`, `pilot/labels_b.jsonl`, `pilot/gold.jsonl`, `results/pilot_agreement.md`.
 - **Done when:** the gold labels exist and the agreement is written down.
@@ -487,3 +492,4 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 25 Nov | 8e | 8-bit (w8), seed-42 runs, all test answers: `kd32m-lr1e4` (32.0M parameters) 122.4 → 34.6 MB, RAGTruth 52.98 → 53.08 (+0.10 [−0.06, 0.29]), PsiloQA 68.65 → 68.73 (+0.08 [0.05, 0.12]); `kd17m-lr1e4` 64.5 → 18.3 MB, RAGTruth 51.10 → 51.19 (+0.09 [−0.03, 0.23]), PsiloQA 63.02 → 62.98 (−0.04 [−0.09, 0.00]). Colab CPU, 8-bit, 1 thread: 0.65 s (32M), 0.25 s (17M). Laptop as in step 14, `kd32m-lr1e4` 8-bit: median 0.47 s on 1 thread (90th percentile 1.15 s), 0.36 s on 2; full precision 0.42 / 0.35 s; memory added 572 MB (8-bit), 652 MB (full). The 32M meets the S5 fallback (exploratory, added later); the 68M does not | `results/kd*-lr1e4_export.json`, `_int8_n2700.json`, `_int8_psilo.json`, `_bench_colab.json`; `work\results\kd32m-lr1e4_bench_laptop.json` on the laptop |
 | 28 Nov | 16 | Pilot set: 26 passages (16 course, written from the CoSc4035 slides' topics; 10 health, CDC excerpts checked line by line against the live pages) and 67 questions (34 course, 33 health; 51 answered fully by the passage, 8 in part, 8 not at all), all kept after review by Gemechu and the colleague | `pilot/` |
 | 28 Nov | 17 | `run.py pilotgen` and the step 17 cell written; tests for the pilot file and the command pass (with a made-up answering model) | `run.py`, `odh/pilot.py`, `colab/plan.ipynb`, `tests/test_pilot.py` |
+| 28 Nov | 17 | First run, 201 answers: answers with content (not only "Unable to answer based on given passages."): Qwen2.5-0.5B 1 of 67, Qwen2.5-1.5B 63, SmolLM2-1.7B 48. Qwen2.5-0.5B also gave this reply to RAGTruth's question prompts when writing its new training answers (64 of 64 in one chunk), so part of its share of the 6,719 new training answers is such replies. Granite-3.3-2B-Instruct added; such bare replies are not marked | `work/pilot/answers.jsonl`, `results/pilot_answers.md` |
