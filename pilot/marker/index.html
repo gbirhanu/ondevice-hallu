@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pilot answer marking</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+/* VOICE: calm, exact work tool for two annotators; no decoration that competes with reading.
+   IDEA: a proofreader's galley: the passage beside the answer, unsupported words marked in two inks.
+   PICTURE: the answer card itself, with claret (conflict) and teal (baseless) marks, at the top.
+   COLOUR and TYPE: newspaper desk: pink band #ffe3dc, ink #1a1817, claret #990f3d, teal #0d7680; Libre Franklin.
+   LAYOUT: passage left, work right above 900px; stacked below (question, answer, passage). */
+:root{color-scheme:light dark;--bg:light-dark(#fbf7f5,#1c1512);--paper:light-dark(#ffffff,#26201c);--band:light-dark(#ffe3dc,#2e211d);
+--ink:light-dark(#1a1817,#f2ece8);--soft:light-dark(#5d5651,#b9aea7);--line:light-dark(#e6dcd7,#433832);
+--cl:light-dark(#990f3d,#ff8fb0);--tl:light-dark(#0d7680,#6fd3dc);--ok:light-dark(#2f6b3a,#8fd49b)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Libre Franklin",system-ui,sans-serif;overflow-x:clip}
+.band{background:var(--band);padding:18px max(4vw,16px) 14px}
+h1{font-weight:800;font-size:clamp(24px,3vw,32px);line-height:1.05;margin:0 0 6px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--soft);font-size:14px}
+.meta b{color:var(--ink);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+button{font:inherit;font-size:15px;min-height:44px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:var(--paper);color:var(--ink);cursor:pointer}
+button:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--tl);outline-offset:2px}
+button[aria-pressed=true]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;flex:1 1 160px;max-width:320px}.bar i{display:block;height:100%;background:var(--tl)}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:20px;padding:20px max(4vw,16px) 40px;max-width:1400px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.passage{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}
+.passage h2,.work h2{font-size:13px;font-weight:600;color:var(--soft);margin:0 0 6px;letter-spacing:0}
+.ptext{white-space:pre-wrap;font-size:15.5px}
+.q{font-size:clamp(19px,2vw,22px);font-weight:600;line-height:1.3;margin:0 0 10px;text-wrap:balance}
+#ans{white-space:pre-wrap;font-size:17px;line-height:1.7;border:2px solid var(--line);border-radius:10px;padding:14px 16px;margin:6px 0 10px;cursor:text}
+#ans mark{border-radius:3px;padding:1px 0;color:inherit;cursor:pointer}
+.EC{background:color-mix(in srgb,var(--cl) 34%,transparent);box-shadow:inset 0 -2px var(--cl)}
+.SC{background:color-mix(in srgb,var(--cl) 15%,transparent);box-shadow:inset 0 -2px var(--cl)}
+.EB{background:color-mix(in srgb,var(--tl) 34%,transparent);box-shadow:inset 0 -2px var(--tl)}
+.SB{background:color-mix(in srgb,var(--tl) 15%,transparent);box-shadow:inset 0 -2px var(--tl)}
+#ans mark.sel{outline:3px solid var(--ink)}
+.tools{border:1px dashed var(--line);border-radius:10px;padding:10px;margin-bottom:10px;min-height:66px}
+.tools p{margin:0 0 6px;font-size:14px;color:var(--soft)}
+.tools button.t-EC,.tools button.t-SC{border-color:var(--cl)}.tools button.t-EB,.tools button.t-SB{border-color:var(--tl)}
+.status{font-size:14px;color:var(--soft)}
+.status.done{color:var(--ok);font-weight:600}
+textarea{width:100%;font:inherit;font-size:16px;min-height:64px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--paper);color:var(--ink)}
+details{margin:10px 0}summary{cursor:pointer;font-weight:600;min-height:32px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.chips button{min-width:48px;min-height:40px;padding:0 6px;font-size:13px}
+.chips .s1{border-color:var(--tl);border-style:dashed}.chips .s2{background:color-mix(in srgb,var(--ok) 22%,var(--paper))}
+.chips .s3{background:color-mix(in srgb,var(--cl) 18%,var(--paper))}.chips .cur{outline:3px solid var(--ink)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px;margin:4px 0}
+.legend span{padding:0 6px;border-radius:3px}
+.note{font-size:14px;color:var(--soft)}
+.warn{background:color-mix(in srgb,var(--cl) 12%,var(--paper));border:1px solid var(--cl);border-radius:8px;padding:8px 12px;margin-top:10px;font-size:14px}
+table{border-collapse:collapse;font-size:14px;width:100%}td{border-top:1px solid var(--line);padding:6px 6px 6px 0;vertical-align:top}
+@media(max-width:900px){main{grid-template-columns:minmax(0,1fr)}.passage{position:static;max-height:none;order:2}.work{order:1}}
+@media(prefers-reduced-motion:no-preference){.bar i{transition:width .3s}}
+</style>
+</head>
+<body>
+<header class="band">
+  <h1>Pilot answer marking</h1>
+  <div class="meta"><span id="who">Loading…</span><span id="save" aria-live="polite"></span><span id="count"></span></div>
+  <div class="row">
+    <button id="vPractice" aria-pressed="true">Practice round (10)</button>
+    <button id="vAll" aria-pressed="false">All answers (179)</button>
+    <div class="bar" aria-hidden="true"><i id="prog" style="width:0"></i></div>
+    <button id="exportDl">Download my marks</button>
+    <button id="exportCp">Copy my marks</button>
+  </div>
+  <div id="warn"></div>
+</header>
+<main>
+  <section class="card work" aria-label="Answer to mark">
+    <h2 id="pos">Answer</h2>
+    <p class="q" id="q"></p>
+    <details id="hintBox"><summary>Short answer from the passage (a hint only)</summary><p class="note" id="hint"></p></details>
+    <h2>The answer: select the words the passage does not support</h2>
+    <div id="ans" tabindex="0"></div>
+    <div class="tools" id="tools"><p>Select words in the answer to mark them, or click a mark to change it.</p></div>
+    <div class="row">
+      <button id="prev">← Previous</button>
+      <button id="noErr">No unsupported parts</button>
+      <button id="done">Done</button>
+      <button id="next">Next →</button>
+      <button id="nextOpen">Next not finished</button>
+    </div>
+    <p class="status" id="state"></p>
+    <label for="noteBox" class="note">Note (doubts, for the comparison)</label>
+    <textarea id="noteBox"></textarea>
+    <details>
+      <summary>How to mark (short guide)</summary>
+      <div class="legend"><span class="EC">Evident conflict</span><span class="SC">Subtle conflict</span><span class="EB">Evident baseless</span><span class="SB">Subtle baseless</span></div>
+      <table>
+        <tr><td>Evident conflict</td><td>The passage clearly contradicts it: a wrong number, name, step or the opposite claim.</td></tr>
+        <tr><td>Subtle conflict</td><td>Slightly changes the passage's meaning: a weaker or stronger word, a changed condition or scope ("approximately 95%" for "more than 95%").</td></tr>
+        <tr><td>Evident baseless</td><td>A clear claim the passage does not contain, even if it is true in the world.</td></tr>
+        <tr><td>Subtle baseless</td><td>A small added detail, reason, generalisation or inference.</td></tr>
+      </table>
+      <p class="note">Mark the shortest part that carries the claim. Do not mark paraphrases, "Based on the passage…", repeated questions, the reply "Unable to answer based on given passages.", true statements that the passage does not say something, missing information, generic advice, or formatting. Keys: 1–4 types, Delete removes a mark, ← → move.
+      Full guide: <a href="https://github.com/gbirhanu/ondevice-hallu/blob/main/pilot/GUIDE.md">pilot/GUIDE.md</a></p>
+    </details>
+    <div class="chips" id="chips" aria-label="Answers in this round"></div>
+  </section>
+  <section class="card passage" aria-label="Passage">
+    <h2 id="ptitle">Passage</h2>
+    <div class="ptext" id="ptext"></div>
+  </section>
+</main>
+<script>
+{
+const TYPES = [['EC', 'Evident conflict'], ['SC', 'Subtle conflict'], ['EB', 'Evident baseless'], ['SB', 'Subtle baseless']];
+const KEY = 'pilot-marks-v1';
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+let D = null, view = 'practice', pos = 0, pending = null, selMark = -1, shownDoc = null;
+let S = {v: 1, answers: {}};
+let docRef = null, dirty = false, writing = false, timer = null, saveMode = 'local';
+try { const l = JSON.parse(localStorage.getItem(KEY) || 'null'); if (l && l.answers) S = l; } catch (e) {}
+
+const list = () => view === 'practice' ? D.answers.filter(a => a.practice) : D.answers;
+const cur = () => list()[pos];
+const st = m => S.answers[m] || (S.answers[m] = {spans: [], done: false, note: '', t: ''});
+const finished = m => !!(S.answers[m] && S.answers[m].done);
+const touched = () => Object.fromEntries(Object.entries(S.answers).filter(([, x]) => x.t));
+
+function setSave(text) { $('save').textContent = text; }
+function touch(a) { st(a.m).t = new Date().toISOString(); persist(); }
+function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify({v: 1, answers: touched()})); } catch (e) {}
+  if (!docRef) { setSave(saveMode === 'local' ? 'Saved in this browser only' : ''); return; }
+  dirty = true; clearTimeout(timer); timer = setTimeout(flush, 1200); setSave('Saving…');
+}
+async function flush() {
+  if (writing || !dirty || !docRef) return;
+  writing = true; dirty = false;
+  try { await docRef.set({v: 1, answers: touched(), updated: new Date().toISOString()}); setSave('All marks saved'); }
+  catch (e) {
+    if (e && e.code === 'invalid_argument') { docRef = null; saveMode = 'local'; showWarn('Your marks cannot be saved to the shared store from this account (ask the owner to invite you as an Editor). They are kept in this browser: use “Download my marks” when you finish.'); setSave('Saved in this browser only'); }
+    else { dirty = true; setSave('Not saved yet, retrying…'); }
+  }
+  writing = false;
+  if (dirty) { clearTimeout(timer); timer = setTimeout(flush, 3000); }
+}
+function showWarn(t) { $('warn').innerHTML = '<div class="warn"></div>'; $('warn').firstChild.textContent = t; }
+
+function render() {
+  const a = cur(); if (!a) return;
+  const q = D.questions[a.q], p = D.passages[q.doc], s = st(a.m);
+  const L = list();
+  $('pos').textContent = `Answer ${pos + 1} of ${L.length}` + (view === 'all' ? ` · question ${a.q}` : '');
+  $('q').textContent = q.question;
+  $('hint').textContent = q.hint; $('hintBox').open = false;
+  if (shownDoc !== q.doc) { $('ptitle').textContent = `Passage · ${p.topic}`; $('ptext').textContent = p.text; $('ptext').parentElement.scrollTop = 0; shownDoc = q.doc; }
+  const spans = s.spans.slice().sort((x, y) => x[0] - y[0]);
+  s.spans = spans;
+  let html = '', at = 0;
+  spans.forEach((sp, i) => {
+    html += esc(a.text.slice(at, sp[0])) + `<mark class="${sp[2]}${i === selMark ? ' sel' : ''}" data-i="${i}" title="${TYPES.find(t => t[0] === sp[2])[1]}">` + esc(a.text.slice(sp[0], sp[1])) + '</mark>';
+    at = sp[1];
+  });
+  $('ans').innerHTML = html + esc(a.text.slice(at));
+  $('noteBox').value = s.note || '';
+  $('state').className = 'status' + (s.done ? ' done' : '');
+  $('state').textContent = s.done ? (spans.length ? `Done · ${spans.length} mark${spans.length > 1 ? 's' : ''}` : 'Done · no unsupported parts')
+    : (spans.length ? `${spans.length} mark${spans.length > 1 ? 's' : ''} · press Done when finished` : 'Not marked yet');
+  $('noErr').disabled = spans.length > 0;
+  $('prev').disabled = pos === 0; $('next').disabled = pos === L.length - 1;
+  renderTools(); renderChips(); renderCount();
+}
+function renderTools() {
+  const a = cur(), t = $('tools');
+  if (pending) {
+    t.innerHTML = '<p>Mark “<b id="selTxt"></b>” as:</p><div class="row">' + TYPES.map((x, i) => `<button class="t-${x[0]}" data-t="${x[0]}">${i + 1} · ${x[1]}</button>`).join('') + '<button data-t="">Cancel</button></div>';
+    $('selTxt').textContent = a.text.slice(pending[0], pending[1]);
+  } else if (selMark >= 0) {
+    const sp = st(a.m).spans[selMark];
+    t.innerHTML = '<p>Mark “<b id="selTxt"></b>”: change its type or remove it.</p><div class="row">' + TYPES.map((x, i) => `<button class="t-${x[0]}" data-t="${x[0]}" aria-pressed="${sp[2] === x[0]}">${i + 1} · ${x[1]}</button>`).join('') + '<button data-t="del">Remove</button><button data-t="">Close</button></div>';
+    $('selTxt').textContent = a.text.slice(sp[0], sp[1]);
+  } else t.innerHTML = '<p>Select words in the answer to mark them, or click a mark to change it.</p>';
+}
+function renderChips() {
+  $('chips').innerHTML = list().map((a, i) => {
+    const s = S.answers[a.m], k = !s ? 0 : s.done ? (s.spans.length ? 3 : 2) : (s.spans.length ? 1 : 0);
+    return `<button class="s${k}${i === pos ? ' cur' : ''}" data-p="${i}" aria-label="Answer ${i + 1}">${i + 1}</button>`;
+  }).join('');
+}
+function renderCount() {
+  const L = list(), n = L.filter(a => finished(a.m)).length, all = D.answers.filter(a => finished(a.m)).length;
+  $('count').textContent = `${n} of ${L.length} finished in this round · ${all} of ${D.answers.length} overall`;
+  $('prog').style.width = (100 * n / L.length) + '%';
+}
+
+function offsetIn(box, node, off) { const r = document.createRange(); r.selectNodeContents(box); r.setEnd(node, off); return r.toString().length; }
+function readSelection() {
+  const sel = window.getSelection(), box = $('ans');
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const r = sel.getRangeAt(0);
+  if (!box.contains(r.startContainer) || !box.contains(r.endContainer)) return;
+  const T = cur().text;
+  let s = offsetIn(box, r.startContainer, r.startOffset), e = offsetIn(box, r.endContainer, r.endOffset);
+  if (e < s) [s, e] = [e, s];
+  while (s > 0 && /\w/.test(T[s - 1]) && /\w/.test(T[s])) s--;
+  while (e < T.length && /\w/.test(T[e]) && /\w/.test(T[e - 1])) e++;
+  while (s < e && /\s/.test(T[s])) s++;
+  while (e > s && /\s/.test(T[e - 1])) e--;
+  if (e <= s) return;
+  pending = [s, e]; selMark = -1; renderTools();
+}
+function applyType(t) {
+  const a = cur(), s = st(a.m);
+  if (pending) {
+    const [b, e] = pending;
+    s.spans = s.spans.filter(sp => sp[1] <= b || sp[0] >= e);
+    s.spans.push([b, e, t]); s.done = false; pending = null;
+    window.getSelection().removeAllRanges();
+  } else if (selMark >= 0) { s.spans[selMark][2] = t; s.done = false; selMark = -1; }
+  touch(a); render();
+}
+function removeMark() { const a = cur(); if (selMark < 0) return; st(a.m).spans.splice(selMark, 1); st(a.m).done = false; selMark = -1; touch(a); render(); }
+function go(p) { const L = list(); if (p < 0 || p >= L.length) return; pos = p; pending = null; selMark = -1; render(); window.scrollTo({top: 0}); }
+function setView(v) { view = v; pos = 0; $('vPractice').setAttribute('aria-pressed', v === 'practice'); $('vAll').setAttribute('aria-pressed', v === 'all'); pending = null; selMark = -1; render(); }
+
+$('ans').addEventListener('mouseup', () => setTimeout(readSelection, 0));
+$('ans').addEventListener('touchend', () => setTimeout(readSelection, 250));
+document.addEventListener('selectionchange', () => { clearTimeout(window.__selT); window.__selT = setTimeout(readSelection, 400); });
+$('ans').addEventListener('click', e => { const m = e.target.closest('mark'); if (m && window.getSelection().isCollapsed) { selMark = +m.dataset.i; pending = null; render(); } });
+$('tools').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const t = b.dataset.t;
+  if (t === 'del') removeMark();
+  else if (t) applyType(t);
+  else { pending = null; selMark = -1; window.getSelection().removeAllRanges(); render(); }
+});
+$('chips').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(+b.dataset.p); });
+$('prev').onclick = () => go(pos - 1);
+$('next').onclick = () => go(pos + 1);
+$('nextOpen').onclick = () => { const L = list(); for (let k = 1; k <= L.length; k++) { const i = (pos + k) % L.length; if (!finished(L[i].m)) return go(i); } };
+$('done').onclick = () => { const a = cur(); st(a.m).done = true; touch(a); render(); };
+$('noErr').onclick = () => { const a = cur(); if (st(a.m).spans.length) return; st(a.m).done = true; touch(a); render(); };
+$('noteBox').addEventListener('change', () => { const a = cur(); st(a.m).note = $('noteBox').value; touch(a); });
+$('vPractice').onclick = () => setView('practice');
+$('vAll').onclick = () => setView('all');
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || !D) return;
+  if ((pending || selMark >= 0) && /^[1-4]$/.test(e.key)) { applyType(TYPES[+e.key - 1][0]); e.preventDefault(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && selMark >= 0) { removeMark(); e.preventDefault(); }
+  else if (e.key === 'Escape') { pending = null; selMark = -1; render(); }
+  else if (e.key === 'ArrowRight' && !pending) go(pos + 1);
+  else if (e.key === 'ArrowLeft' && !pending) go(pos - 1);
+});
+
+function exportText(name) {
+  return JSON.stringify({annotator: name || '', exported: new Date().toISOString(), data_version: D.version, answers: touched()}, null, 1);
+}
+let myName = '';
+$('exportCp').onclick = async () => {
+  try { await navigator.clipboard.writeText(exportText(myName)); setSave('Copied: paste it into a message to Gemechu'); }
+  catch (e) { setSave('Copy was refused by the browser'); }
+};
+$('exportDl').onclick = async () => {
+  const dl = (window.claude && window.claude.use) ? await window.claude.use('downloads').catch(() => null) : null;
+  if (!dl) { setSave('Download is not available here: use Copy instead'); return; }
+  try { await dl.save({filename: 'pilot_marks.json', data: exportText(myName)}); setSave('Download offered'); }
+  catch (e) { setSave('Download did not happen: use Copy instead'); }
+};
+
+async function connect() {
+  const use = n => (window.claude && window.claude.use) ? window.claude.use(n).catch(() => null) : Promise.resolve(null);
+  const [user, db] = await Promise.all([use('user'), use('db')]);
+  let id = null;
+  if (user) {
+    try { id = await user.id(); } catch (e) {}
+    try { const me = await user.me(); myName = (me && me.name) || ''; } catch (e) {}
+  }
+  $('who').innerHTML = 'Marking as <b></b>'; $('who').querySelector('b').textContent = myName || (id ? 'you' : 'a guest (not signed in)');
+  if (!db || !id) { saveMode = 'local'; setSave('Saved in this browser only'); showWarn('This view cannot reach the shared store, so your marks stay in this browser. Use “Download my marks” or “Copy my marks” when you finish.'); return; }
+  const ref = db.doc('marks/' + id);
+  const slow = setTimeout(() => setSave('The shared store is slow to answer…'), 10000);
+  try {
+    const snap = await ref.get();
+    clearTimeout(slow);
+    const remote = snap.exists ? (snap.data().answers || {}) : {};
+    for (const [m, r] of Object.entries(remote)) {
+      const l = S.answers[m];
+      if (!l || (r.t || '') > (l.t || '')) S.answers[m] = JSON.parse(JSON.stringify(r));
+    }
+    docRef = ref; saveMode = 'shared';
+    const localNewer = Object.entries(touched()).some(([m, l]) => !remote[m] || l.t > (remote[m].t || ''));
+    if (localNewer) persist(); else setSave('All marks saved');
+    render();
+  } catch (e) { clearTimeout(slow); saveMode = 'local'; setSave('Saved in this browser only'); }
+}
+
+fetch('data.json').then(r => r.json()).then(d => { D = d; $('vAll').textContent = `All answers (${D.answers.length})`; render(); connect(); })
+  .catch(() => { $('q').textContent = 'The answers could not be loaded. Reload the page.'; });
+}
+</script>
+</body>
+</html>

@@ -388,7 +388,9 @@ choice in `results/lrpick_<student>.json`.
   prompts (one chunk of its new training answers: 64 of 64 such replies). IBM Granite-3.3-2B-Instruct (Apache-2.0)
   is added as a fourth answering model; running the step 17 cell again writes only its answers. An answer that is
   only that reply makes no claim: it is not marked and counts as an answer without errors (EVALUATION.md, 28 Nov).
-- [ ] **Who:** Claude wrote `run.py pilotgen` and the cell; Gemechu runs. **Needs:** step 16. **Time:** about 20–30 GPU minutes.
+- **28 November, done:** 268 answers; 179 with content to mark (Qwen2.5-0.5B 1, Qwen2.5-1.5B 63, SmolLM2-1.7B 48,
+  Granite 67). Copied into `pilot/answers.jsonl`.
+- [x] **Who:** Claude wrote `run.py pilotgen` and the cell; Gemechu runs. **Needs:** step 16. **Time:** about 20–30 GPU minutes.
 - **Do:** Qwen2.5-0.5B, Qwen2.5-1.5B and SmolLM2-1.7B answer every question from its passage, with RAGTruth's
   question-answering prompt (one passage instead of three, and RAGTruth's own sentence asking for "Unable to answer
   based on given passages." when the passage does not answer). Sampling as for the new training answers; an answer
@@ -398,6 +400,11 @@ choice in `results/lrpick_<student>.json`.
   `results/pilot_answers.md`. **Done when:** every question has three answers.
 
 ### Step 18 — Annotation guide, tool and practice round
+- **28 November:** `pilot/GUIDE.md` written (RAGTruth's four types, examples from the pilot answers) and the marking
+  page published as a claude.ai artifact ("Pilot answer marking"; source in `pilot/marker/`). Each annotator's marks
+  are saved in the page's database (one document each; only the owner reads both); the page hides which model wrote
+  an answer and groups answers by question. The owner shares the page with the colleague as an Editor. Practice
+  round: the 10 answers in `pilot/marking_key.json`; then tell Claude "practice done".
 - [ ] **Who:** Claude drafts the guide and builds a simple marking page; both annotators practise. **Needs:** step 17. **Time:** half a day.
 - **Do:** the guide says what counts as unsupported and how to mark the shortest span, with RAGTruth's four error
   types. Both people mark the same 10 answers, compare, and fix the guide.
@@ -405,7 +412,7 @@ choice in `results/lrpick_<student>.json`.
 
 ### Step 19 — Mark the answers and measure agreement
 - [ ] **Who:** Gemechu and the colleague, separately (about 1.5 days each); Claude computes agreement. **Needs:** step 18.
-- **Do:** each person marks every answer that is not only the "Unable to answer" reply (about 170) alone. Claude computes word-level Cohen's κ and span F1 between the two.
+- **Do:** each person marks every answer that is not only the "Unable to answer" reply (179) alone. Claude computes word-level Cohen's κ and span F1 between the two.
   If κ < 0.6, discuss the disagreements and revise. Then agree one final marking per answer.
 - **Output:** `pilot/labels_a.jsonl`, `pilot/labels_b.jsonl`, `pilot/gold.jsonl`, `results/pilot_agreement.md`.
 - **Done when:** the gold labels exist and the agreement is written down.
@@ -493,3 +500,5 @@ More new answers and each small model alone; made-up errors added at 17M; a seco
 | 28 Nov | 16 | Pilot set: 26 passages (16 course, written from the CoSc4035 slides' topics; 10 health, CDC excerpts checked line by line against the live pages) and 67 questions (34 course, 33 health; 51 answered fully by the passage, 8 in part, 8 not at all), all kept after review by Gemechu and the colleague | `pilot/` |
 | 28 Nov | 17 | `run.py pilotgen` and the step 17 cell written; tests for the pilot file and the command pass (with a made-up answering model) | `run.py`, `odh/pilot.py`, `colab/plan.ipynb`, `tests/test_pilot.py` |
 | 28 Nov | 17 | First run, 201 answers: answers with content (not only "Unable to answer based on given passages."): Qwen2.5-0.5B 1 of 67, Qwen2.5-1.5B 63, SmolLM2-1.7B 48. Qwen2.5-0.5B also gave this reply to RAGTruth's question prompts when writing its new training answers (64 of 64 in one chunk), so part of its share of the 6,719 new training answers is such replies. Granite-3.3-2B-Instruct added; such bare replies are not marked | `work/pilot/answers.jsonl`, `results/pilot_answers.md` |
+| 28 Nov | 17 | Granite-3.3-2B-Instruct added (float32 on the T4): 67 answers, all with content (mean 83 words). 268 answers in total, 179 to mark | `pilot/answers.jsonl`, `results/pilot_answers.md` |
+| 28 Nov | 18 | `pilot/GUIDE.md`; marking page published (artifact "Pilot answer marking", data in `pilot/marker/`, marks in the page's database); 10 practice answers and 6 guide-example answers listed in `pilot/marking_key.json`; page logic checked in a simulated browser (23 checks) | `pilot/` |

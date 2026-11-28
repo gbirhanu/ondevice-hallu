@@ -11,7 +11,13 @@ trained on it (rule R6).
   `topic`, `question`, `answerable` (yes, partly or no: whether the passage answers it), `question_type`,
   `reference_answer` (a short answer taken from the passage, for the annotators), `status`, `source`, `licence`,
   `passage`.
-- `answers.jsonl` (step 17): the answers of the phone-sized models.
+- `answers.jsonl` (step 17): 268 answers, from Qwen2.5-0.5B, Qwen2.5-1.5B, SmolLM2-1.7B and Granite-3.3-2B-Instruct
+  (67 each), with the prompt each model was given.
+- `GUIDE.md` (step 18): the marking guide.
+- `marking_key.json`: the 179 answers that are marked (all but the bare "Unable to answer based on given passages."
+  replies) under opaque ids m001-m179, the 10 practice answers and the guide's example answers.
+- `marker/`: the marking page (published as a claude.ai artifact; each annotator's marks are kept in its database) and
+  its data, without model names.
 
 ## Sources and licences
 - Course passages: written for this project, in plain words, from the topics of the CoSc4035 Computer Security

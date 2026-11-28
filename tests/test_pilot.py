@@ -30,6 +30,22 @@ class PilotFile(unittest.TestCase):
             doc = ROOT / 'pilot' / 'documents' / q['domain'] / f"{q['doc_id']}.md"
             self.assertIn(' '.join(q['passage'].split()), ' '.join(doc.read_text(encoding='utf-8').split()), q['id'])
 
+    def test_the_marking_set_is_every_answer_with_content_and_hides_the_models(self):
+        answers = pilot.load_answers(ROOT / 'pilot' / 'answers.jsonl')
+        key = json.loads((ROOT / 'pilot' / 'marking_key.json').read_text(encoding='utf-8'))
+        with_content = {k for k, r in answers.items() if not pilot.is_bare_refusal(r['answer'])}
+        self.assertEqual(len(answers), 67 * 4)
+        self.assertEqual(set(key['key'].values()), with_content)
+        self.assertEqual(len(key['practice']), 10)
+        self.assertTrue(set(key['practice']) | set(key['guide_examples']) <= set(key['key']))
+        page = (ROOT / 'pilot' / 'marker' / 'data.json').read_text(encoding='utf-8')
+        for name in ('qwen', 'smollm', 'granite'):
+            self.assertNotIn(name, page.lower())
+        data = json.loads(page)
+        self.assertEqual([a['m'] for a in data['answers']], list(key['key']))
+        for a in data['answers']:
+            self.assertEqual(a['text'], answers[key['key'][a['m']]]['answer'])
+
     def test_the_prompt_follows_ragtruth(self):
         text = pilot.prompt_of('What is X?', 'X is a letter.')
         self.assertTrue(text.startswith('Briefly answer the following question:\nWhat is X?\nBear in mind that your '
